@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: analyses
     description: Bug report analysis pipeline operations
+  - name: github
+    description: GitHub issue ingestion
 paths:
   /healthz:
     get:
@@ -32,6 +34,23 @@ paths:
       operationId: listAnalyses
       tags: [analyses]
       summary: List all bug analyses
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, running, completed, failed]
+        - name: inputType
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         "200":
           description: List of analyses
@@ -83,6 +102,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+    patch:
+      operationId: updateAnalysis
+      tags: [analyses]
+      summary: Update an analysis (title, codeContext)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAnalysisBody"
+      responses:
+        "200":
+          description: Updated analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BugAnalysisFull"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
     delete:
       operationId: deleteAnalysis
       tags: [analyses]
@@ -110,11 +158,7 @@ paths:
       summary: Run the multi-agent pipeline (SSE stream)
       description: |
         Starts the multi-agent pipeline for the given bug analysis.
-        Returns an SSE stream of agent events showing real-time progress through:
-        1. Entity Extraction Agent
-        2. Hypothesis Generator Agent
-        3. Step Validator Agent
-        4. Test Writer Agent
+        Returns an SSE stream of agent events showing real-time progress.
         Events: { type: "agent_start" | "agent_output" | "agent_done" | "pipeline_done" | "error", agentName: string, content: string }
       parameters:
         - name: id
@@ -127,6 +171,31 @@ paths:
           description: SSE stream of agent events
           content:
             text/event-stream: {}
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /analyses/{id}/export:
+    get:
+      operationId: exportAnalysis
+      tags: [analyses]
+      summary: Export analysis as markdown report
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Markdown report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportAnalysisResponse"
         "404":
           description: Not found
           content:
@@ -147,6 +216,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/AnalysisStats"
 
+  /github/fetch-issue:
+    post:
+      operationId: fetchGithubIssue
+      tags: [github]
+      summary: Fetch a GitHub issue and return its content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FetchGithubIssueBody"
+      responses:
+        "200":
+          description: GitHub issue content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GithubIssueContent"
+        "400":
+          description: Invalid URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Issue not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
 components:
   schemas:
     HealthStatus:
@@ -166,7 +266,7 @@ components:
           type: string
         inputType:
           type: string
-          enum: [raw_text, github_url, stack_trace]
+          enum: [raw_text, github_url, stack_trace, jira_ticket, sentry_event, log_file, curl_request, video_description]
         rawInput:
           type: string
         githubUrl:
@@ -178,6 +278,8 @@ components:
           enum: [pending, running, completed, failed]
         confidenceScore:
           type: ["number", "null"]
+        tags:
+          type: ["string", "null"]
         createdAt:
           type: string
           format: date-time
@@ -202,7 +304,7 @@ components:
           type: string
         inputType:
           type: string
-          enum: [raw_text, github_url, stack_trace]
+          enum: [raw_text, github_url, stack_trace, jira_ticket, sentry_event, log_file, curl_request, video_description]
         rawInput:
           type: string
         githubUrl:
@@ -214,6 +316,8 @@ components:
           enum: [pending, running, completed, failed]
         confidenceScore:
           type: ["number", "null"]
+        tags:
+          type: ["string", "null"]
         extractedEntities:
           type: ["string", "null"]
         hypotheses:
@@ -248,17 +352,29 @@ components:
           type: string
         inputType:
           type: string
-          enum: [raw_text, github_url, stack_trace]
+          enum: [raw_text, github_url, stack_trace, jira_ticket, sentry_event, log_file, curl_request, video_description]
         rawInput:
           type: string
         githubUrl:
           type: string
         codeContext:
           type: string
+        tags:
+          type: string
       required:
         - title
         - inputType
         - rawInput
+
+    UpdateAnalysisBody:
+      type: object
+      properties:
+        title:
+          type: string
+        codeContext:
+          type: string
+        tags:
+          type: string
 
     AnalysisStats:
       type: object
@@ -271,14 +387,85 @@ components:
           type: integer
         failed:
           type: integer
+        pending:
+          type: integer
         avgConfidence:
           type: ["number", "null"]
+        byInputType:
+          type: array
+          items:
+            $ref: "#/components/schemas/InputTypeCount"
       required:
         - total
         - completed
         - running
         - failed
+        - pending
         - avgConfidence
+        - byInputType
+
+    InputTypeCount:
+      type: object
+      properties:
+        inputType:
+          type: string
+        count:
+          type: integer
+      required:
+        - inputType
+        - count
+
+    ExportAnalysisResponse:
+      type: object
+      properties:
+        markdown:
+          type: string
+        title:
+          type: string
+      required:
+        - markdown
+        - title
+
+    FetchGithubIssueBody:
+      type: object
+      properties:
+        url:
+          type: string
+      required:
+        - url
+
+    GithubIssueContent:
+      type: object
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+        state:
+          type: string
+        labels:
+          type: array
+          items:
+            type: string
+        comments:
+          type: array
+          items:
+            type: string
+        url:
+          type: string
+        number:
+          type: integer
+        author:
+          type: string
+      required:
+        - title
+        - body
+        - state
+        - labels
+        - comments
+        - url
+        - number
+        - author
 
     ApiError:
       type: object

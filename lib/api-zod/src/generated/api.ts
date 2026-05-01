@@ -18,15 +18,31 @@ export const HealthCheckResponse = zod.object({
 /**
  * @summary List all bug analyses
  */
+export const ListAnalysesQueryParams = zod.object({
+  status: zod.enum(["pending", "running", "completed", "failed"]).optional(),
+  inputType: zod.coerce.string().optional(),
+  search: zod.coerce.string().optional(),
+});
+
 export const ListAnalysesResponseItem = zod.object({
   id: zod.number(),
   title: zod.string(),
-  inputType: zod.enum(["raw_text", "github_url", "stack_trace"]),
+  inputType: zod.enum([
+    "raw_text",
+    "github_url",
+    "stack_trace",
+    "jira_ticket",
+    "sentry_event",
+    "log_file",
+    "curl_request",
+    "video_description",
+  ]),
   rawInput: zod.string(),
   githubUrl: zod.string().nullish(),
   codeContext: zod.string().nullish(),
   status: zod.enum(["pending", "running", "completed", "failed"]),
   confidenceScore: zod.number().nullish(),
+  tags: zod.string().nullish(),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
 });
@@ -37,10 +53,20 @@ export const ListAnalysesResponse = zod.array(ListAnalysesResponseItem);
  */
 export const CreateAnalysisBody = zod.object({
   title: zod.string(),
-  inputType: zod.enum(["raw_text", "github_url", "stack_trace"]),
+  inputType: zod.enum([
+    "raw_text",
+    "github_url",
+    "stack_trace",
+    "jira_ticket",
+    "sentry_event",
+    "log_file",
+    "curl_request",
+    "video_description",
+  ]),
   rawInput: zod.string(),
   githubUrl: zod.string().optional(),
   codeContext: zod.string().optional(),
+  tags: zod.string().optional(),
 });
 
 /**
@@ -53,12 +79,64 @@ export const GetAnalysisParams = zod.object({
 export const GetAnalysisResponse = zod.object({
   id: zod.number(),
   title: zod.string(),
-  inputType: zod.enum(["raw_text", "github_url", "stack_trace"]),
+  inputType: zod.enum([
+    "raw_text",
+    "github_url",
+    "stack_trace",
+    "jira_ticket",
+    "sentry_event",
+    "log_file",
+    "curl_request",
+    "video_description",
+  ]),
   rawInput: zod.string(),
   githubUrl: zod.string().nullish(),
   codeContext: zod.string().nullish(),
   status: zod.enum(["pending", "running", "completed", "failed"]),
   confidenceScore: zod.number().nullish(),
+  tags: zod.string().nullish(),
+  extractedEntities: zod.string().nullish(),
+  hypotheses: zod.string().nullish(),
+  reproductionSteps: zod.string().nullish(),
+  testCode: zod.string().nullish(),
+  flowDiagram: zod.string().nullish(),
+  clarifyingQuestions: zod.string().nullish(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Update an analysis (title, codeContext)
+ */
+export const UpdateAnalysisParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateAnalysisBody = zod.object({
+  title: zod.string().optional(),
+  codeContext: zod.string().optional(),
+  tags: zod.string().optional(),
+});
+
+export const UpdateAnalysisResponse = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  inputType: zod.enum([
+    "raw_text",
+    "github_url",
+    "stack_trace",
+    "jira_ticket",
+    "sentry_event",
+    "log_file",
+    "curl_request",
+    "video_description",
+  ]),
+  rawInput: zod.string(),
+  githubUrl: zod.string().nullish(),
+  codeContext: zod.string().nullish(),
+  status: zod.enum(["pending", "running", "completed", "failed"]),
+  confidenceScore: zod.number().nullish(),
+  tags: zod.string().nullish(),
   extractedEntities: zod.string().nullish(),
   hypotheses: zod.string().nullish(),
   reproductionSteps: zod.string().nullish(),
@@ -78,17 +156,25 @@ export const DeleteAnalysisParams = zod.object({
 
 /**
  * Starts the multi-agent pipeline for the given bug analysis.
-Returns an SSE stream of agent events showing real-time progress through:
-1. Entity Extraction Agent
-2. Hypothesis Generator Agent
-3. Step Validator Agent
-4. Test Writer Agent
+Returns an SSE stream of agent events showing real-time progress.
 Events: { type: "agent_start" | "agent_output" | "agent_done" | "pipeline_done" | "error", agentName: string, content: string }
 
  * @summary Run the multi-agent pipeline (SSE stream)
  */
 export const RunAnalysisParams = zod.object({
   id: zod.coerce.number(),
+});
+
+/**
+ * @summary Export analysis as markdown report
+ */
+export const ExportAnalysisParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ExportAnalysisResponse = zod.object({
+  markdown: zod.string(),
+  title: zod.string(),
 });
 
 /**
@@ -99,5 +185,30 @@ export const GetAnalysisStatsResponse = zod.object({
   completed: zod.number(),
   running: zod.number(),
   failed: zod.number(),
+  pending: zod.number(),
   avgConfidence: zod.number().nullable(),
+  byInputType: zod.array(
+    zod.object({
+      inputType: zod.string(),
+      count: zod.number(),
+    }),
+  ),
+});
+
+/**
+ * @summary Fetch a GitHub issue and return its content
+ */
+export const FetchGithubIssueBody = zod.object({
+  url: zod.string(),
+});
+
+export const FetchGithubIssueResponse = zod.object({
+  title: zod.string(),
+  body: zod.string(),
+  state: zod.string(),
+  labels: zod.array(zod.string()),
+  comments: zod.array(zod.string()),
+  url: zod.string(),
+  number: zod.number(),
+  author: zod.string(),
 });

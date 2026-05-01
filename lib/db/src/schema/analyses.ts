@@ -12,11 +12,12 @@ export const analysesTable = pgTable("analyses", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
   inputType: text("input_type", {
-    enum: ["raw_text", "github_url", "stack_trace"],
+    enum: ["raw_text", "github_url", "stack_trace", "jira_ticket", "sentry_event", "log_file", "curl_request", "video_description"],
   }).notNull(),
   rawInput: text("raw_input").notNull(),
   githubUrl: text("github_url"),
   codeContext: text("code_context"),
+  tags: text("tags"),
   status: text("status", {
     enum: ["pending", "running", "completed", "failed"],
   })

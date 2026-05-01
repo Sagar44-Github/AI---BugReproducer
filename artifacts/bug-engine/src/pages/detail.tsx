@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useRoute, Link } from "wouter";
+import { useRoute, Link, useSearch, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { 
   useGetAnalysis, 
@@ -38,7 +38,7 @@ type AgentState = {
 export function AnalysisDetail() {
   const [, params] = useRoute("/analyses/:id");
   const id = params?.id ? parseInt(params.id, 10) : 0;
-  const [, setLocation] = useRoute();
+  const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -52,6 +52,8 @@ export function AnalysisDetail() {
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
   const [pipelineError, setPipelineError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const search = useSearch();
+  const autoRunTriggered = useRef(false);
 
   const startPipeline = async () => {
     if (isRunning) return;
@@ -181,7 +183,7 @@ export function AnalysisDetail() {
           toast({
             variant: "destructive",
             title: "Error deleting analysis",
-            description: err.error || "Unknown error"
+            description: (err as unknown as { error?: string }).error || "Unknown error"
           });
         }
       }
@@ -354,7 +356,7 @@ export function AnalysisDetail() {
                         {agent.status === "running" && (
                           <span className="inline-block w-2 h-3 ml-1 bg-primary animate-pulse" />
                         )}
-                        <div ref={el => outputEndRefs.current[agent.name] = el} />
+                        <div ref={el => { outputEndRefs.current[agent.name] = el; }} />
                       </div>
                     )}
                   </Card>

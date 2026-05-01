@@ -22,7 +22,12 @@ import type {
   BugAnalysis,
   BugAnalysisFull,
   CreateAnalysisBody,
+  ExportAnalysisResponse,
+  FetchGithubIssueBody,
+  GithubIssueContent,
   HealthStatus,
+  ListAnalysesParams,
+  UpdateAnalysisBody,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -113,41 +118,57 @@ export function useHealthCheck<
 /**
  * @summary List all bug analyses
  */
-export const getListAnalysesUrl = () => {
-  return `/api/analyses`;
+export const getListAnalysesUrl = (params?: ListAnalysesParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/analyses?${stringifiedParams}`
+    : `/api/analyses`;
 };
 
 export const listAnalyses = async (
+  params?: ListAnalysesParams,
   options?: RequestInit,
 ): Promise<BugAnalysis[]> => {
-  return customFetch<BugAnalysis[]>(getListAnalysesUrl(), {
+  return customFetch<BugAnalysis[]>(getListAnalysesUrl(params), {
     ...options,
     method: "GET",
   });
 };
 
-export const getListAnalysesQueryKey = () => {
-  return [`/api/analyses`] as const;
+export const getListAnalysesQueryKey = (params?: ListAnalysesParams) => {
+  return [`/api/analyses`, ...(params ? [params] : [])] as const;
 };
 
 export const getListAnalysesQueryOptions = <
   TData = Awaited<ReturnType<typeof listAnalyses>>,
   TError = ErrorType<unknown>,
->(options?: {
-  query?: UseQueryOptions<
-    Awaited<ReturnType<typeof listAnalyses>>,
-    TError,
-    TData
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}) => {
+>(
+  params?: ListAnalysesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAnalyses>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getListAnalysesQueryKey();
+  const queryKey = queryOptions?.queryKey ?? getListAnalysesQueryKey(params);
 
   const queryFn: QueryFunction<Awaited<ReturnType<typeof listAnalyses>>> = ({
     signal,
-  }) => listAnalyses({ signal, ...requestOptions });
+  }) => listAnalyses(params, { signal, ...requestOptions });
 
   return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
     Awaited<ReturnType<typeof listAnalyses>>,
@@ -168,15 +189,18 @@ export type ListAnalysesQueryError = ErrorType<unknown>;
 export function useListAnalyses<
   TData = Awaited<ReturnType<typeof listAnalyses>>,
   TError = ErrorType<unknown>,
->(options?: {
-  query?: UseQueryOptions<
-    Awaited<ReturnType<typeof listAnalyses>>,
-    TError,
-    TData
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-  const queryOptions = getListAnalysesQueryOptions(options);
+>(
+  params?: ListAnalysesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAnalyses>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListAnalysesQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
@@ -359,6 +383,93 @@ export function useGetAnalysis<
 }
 
 /**
+ * @summary Update an analysis (title, codeContext)
+ */
+export const getUpdateAnalysisUrl = (id: number) => {
+  return `/api/analyses/${id}`;
+};
+
+export const updateAnalysis = async (
+  id: number,
+  updateAnalysisBody: UpdateAnalysisBody,
+  options?: RequestInit,
+): Promise<BugAnalysisFull> => {
+  return customFetch<BugAnalysisFull>(getUpdateAnalysisUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateAnalysisBody),
+  });
+};
+
+export const getUpdateAnalysisMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateAnalysis>>,
+    TError,
+    { id: number; data: BodyType<UpdateAnalysisBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateAnalysis>>,
+  TError,
+  { id: number; data: BodyType<UpdateAnalysisBody> },
+  TContext
+> => {
+  const mutationKey = ["updateAnalysis"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateAnalysis>>,
+    { id: number; data: BodyType<UpdateAnalysisBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateAnalysis(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateAnalysisMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateAnalysis>>
+>;
+export type UpdateAnalysisMutationBody = BodyType<UpdateAnalysisBody>;
+export type UpdateAnalysisMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Update an analysis (title, codeContext)
+ */
+export const useUpdateAnalysis = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateAnalysis>>,
+    TError,
+    { id: number; data: BodyType<UpdateAnalysisBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateAnalysis>>,
+  TError,
+  { id: number; data: BodyType<UpdateAnalysisBody> },
+  TContext
+> => {
+  return useMutation(getUpdateAnalysisMutationOptions(options));
+};
+
+/**
  * @summary Delete a bug analysis
  */
 export const getDeleteAnalysisUrl = (id: number) => {
@@ -444,11 +555,7 @@ export const useDeleteAnalysis = <
 
 /**
  * Starts the multi-agent pipeline for the given bug analysis.
-Returns an SSE stream of agent events showing real-time progress through:
-1. Entity Extraction Agent
-2. Hypothesis Generator Agent
-3. Step Validator Agent
-4. Test Writer Agent
+Returns an SSE stream of agent events showing real-time progress.
 Events: { type: "agent_start" | "agent_output" | "agent_done" | "pipeline_done" | "error", agentName: string, content: string }
 
  * @summary Run the multi-agent pipeline (SSE stream)
@@ -535,6 +642,93 @@ export const useRunAnalysis = <
 };
 
 /**
+ * @summary Export analysis as markdown report
+ */
+export const getExportAnalysisUrl = (id: number) => {
+  return `/api/analyses/${id}/export`;
+};
+
+export const exportAnalysis = async (
+  id: number,
+  options?: RequestInit,
+): Promise<ExportAnalysisResponse> => {
+  return customFetch<ExportAnalysisResponse>(getExportAnalysisUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getExportAnalysisQueryKey = (id: number) => {
+  return [`/api/analyses/${id}/export`] as const;
+};
+
+export const getExportAnalysisQueryOptions = <
+  TData = Awaited<ReturnType<typeof exportAnalysis>>,
+  TError = ErrorType<ApiError>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof exportAnalysis>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getExportAnalysisQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof exportAnalysis>>> = ({
+    signal,
+  }) => exportAnalysis(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof exportAnalysis>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ExportAnalysisQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exportAnalysis>>
+>;
+export type ExportAnalysisQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Export analysis as markdown report
+ */
+
+export function useExportAnalysis<
+  TData = Awaited<ReturnType<typeof exportAnalysis>>,
+  TError = ErrorType<ApiError>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof exportAnalysis>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getExportAnalysisQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
  * @summary Get summary stats across all analyses
  */
 export const getGetAnalysisStatsUrl = () => {
@@ -608,3 +802,89 @@ export function useGetAnalysisStats<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Fetch a GitHub issue and return its content
+ */
+export const getFetchGithubIssueUrl = () => {
+  return `/api/github/fetch-issue`;
+};
+
+export const fetchGithubIssue = async (
+  fetchGithubIssueBody: FetchGithubIssueBody,
+  options?: RequestInit,
+): Promise<GithubIssueContent> => {
+  return customFetch<GithubIssueContent>(getFetchGithubIssueUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(fetchGithubIssueBody),
+  });
+};
+
+export const getFetchGithubIssueMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof fetchGithubIssue>>,
+    TError,
+    { data: BodyType<FetchGithubIssueBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof fetchGithubIssue>>,
+  TError,
+  { data: BodyType<FetchGithubIssueBody> },
+  TContext
+> => {
+  const mutationKey = ["fetchGithubIssue"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof fetchGithubIssue>>,
+    { data: BodyType<FetchGithubIssueBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return fetchGithubIssue(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type FetchGithubIssueMutationResult = NonNullable<
+  Awaited<ReturnType<typeof fetchGithubIssue>>
+>;
+export type FetchGithubIssueMutationBody = BodyType<FetchGithubIssueBody>;
+export type FetchGithubIssueMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Fetch a GitHub issue and return its content
+ */
+export const useFetchGithubIssue = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof fetchGithubIssue>>,
+    TError,
+    { data: BodyType<FetchGithubIssueBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof fetchGithubIssue>>,
+  TError,
+  { data: BodyType<FetchGithubIssueBody> },
+  TContext
+> => {
+  return useMutation(getFetchGithubIssueMutationOptions(options));
+};

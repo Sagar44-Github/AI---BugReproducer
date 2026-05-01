@@ -16,6 +16,11 @@ export const BugAnalysisInputType = {
   raw_text: "raw_text",
   github_url: "github_url",
   stack_trace: "stack_trace",
+  jira_ticket: "jira_ticket",
+  sentry_event: "sentry_event",
+  log_file: "log_file",
+  curl_request: "curl_request",
+  video_description: "video_description",
 } as const;
 
 export type BugAnalysisStatus =
@@ -40,6 +45,8 @@ export interface BugAnalysis {
   status: BugAnalysisStatus;
   /** @nullable */
   confidenceScore?: number | null;
+  /** @nullable */
+  tags?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -51,6 +58,11 @@ export const BugAnalysisFullInputType = {
   raw_text: "raw_text",
   github_url: "github_url",
   stack_trace: "stack_trace",
+  jira_ticket: "jira_ticket",
+  sentry_event: "sentry_event",
+  log_file: "log_file",
+  curl_request: "curl_request",
+  video_description: "video_description",
 } as const;
 
 export type BugAnalysisFullStatus =
@@ -76,6 +88,8 @@ export interface BugAnalysisFull {
   /** @nullable */
   confidenceScore?: number | null;
   /** @nullable */
+  tags?: string | null;
+  /** @nullable */
   extractedEntities?: string | null;
   /** @nullable */
   hypotheses?: string | null;
@@ -98,6 +112,11 @@ export const CreateAnalysisBodyInputType = {
   raw_text: "raw_text",
   github_url: "github_url",
   stack_trace: "stack_trace",
+  jira_ticket: "jira_ticket",
+  sentry_event: "sentry_event",
+  log_file: "log_file",
+  curl_request: "curl_request",
+  video_description: "video_description",
 } as const;
 
 export interface CreateAnalysisBody {
@@ -106,6 +125,18 @@ export interface CreateAnalysisBody {
   rawInput: string;
   githubUrl?: string;
   codeContext?: string;
+  tags?: string;
+}
+
+export interface UpdateAnalysisBody {
+  title?: string;
+  codeContext?: string;
+  tags?: string;
+}
+
+export interface InputTypeCount {
+  inputType: string;
+  count: number;
 }
 
 export interface AnalysisStats {
@@ -113,10 +144,48 @@ export interface AnalysisStats {
   completed: number;
   running: number;
   failed: number;
+  pending: number;
   /** @nullable */
   avgConfidence: number | null;
+  byInputType: InputTypeCount[];
+}
+
+export interface ExportAnalysisResponse {
+  markdown: string;
+  title: string;
+}
+
+export interface FetchGithubIssueBody {
+  url: string;
+}
+
+export interface GithubIssueContent {
+  title: string;
+  body: string;
+  state: string;
+  labels: string[];
+  comments: string[];
+  url: string;
+  number: number;
+  author: string;
 }
 
 export interface ApiError {
   error: string;
 }
+
+export type ListAnalysesParams = {
+  status?: ListAnalysesStatus;
+  inputType?: string;
+  search?: string;
+};
+
+export type ListAnalysesStatus =
+  (typeof ListAnalysesStatus)[keyof typeof ListAnalysesStatus];
+
+export const ListAnalysesStatus = {
+  pending: "pending",
+  running: "running",
+  completed: "completed",
+  failed: "failed",
+} as const;
