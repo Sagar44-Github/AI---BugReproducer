@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Bug Reproduction Engine"
+version = "1.0.0"
+id = "artifacts/bug-engine"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19245
+
+[services.development]
+run = "pnpm --filter @workspace/bug-engine run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/bug-engine", "run", "build" ]
+publicDir = "artifacts/bug-engine/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19245"
+BASE_PATH = "/"

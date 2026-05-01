@@ -3,13 +3,15 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Bug Reproduction Engine API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: analyses
+    description: Bug report analysis pipeline operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,127 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /analyses:
+    get:
+      operationId: listAnalyses
+      tags: [analyses]
+      summary: List all bug analyses
+      responses:
+        "200":
+          description: List of analyses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BugAnalysis"
+    post:
+      operationId: createAnalysis
+      tags: [analyses]
+      summary: Create a new bug analysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAnalysisBody"
+      responses:
+        "201":
+          description: Created analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BugAnalysis"
+
+  /analyses/{id}:
+    get:
+      operationId: getAnalysis
+      tags: [analyses]
+      summary: Get a bug analysis by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Bug analysis with all agent outputs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BugAnalysisFull"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteAnalysis
+      tags: [analyses]
+      summary: Delete a bug analysis
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /analyses/{id}/run:
+    post:
+      operationId: runAnalysis
+      tags: [analyses]
+      summary: Run the multi-agent pipeline (SSE stream)
+      description: |
+        Starts the multi-agent pipeline for the given bug analysis.
+        Returns an SSE stream of agent events showing real-time progress through:
+        1. Entity Extraction Agent
+        2. Hypothesis Generator Agent
+        3. Step Validator Agent
+        4. Test Writer Agent
+        Events: { type: "agent_start" | "agent_output" | "agent_done" | "pipeline_done" | "error", agentName: string, content: string }
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: SSE stream of agent events
+          content:
+            text/event-stream: {}
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /analyses/stats/summary:
+    get:
+      operationId: getAnalysisStats
+      tags: [analyses]
+      summary: Get summary stats across all analyses
+      responses:
+        "200":
+          description: Analysis statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisStats"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +157,133 @@ components:
       required:
         - status
 
+    BugAnalysis:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        inputType:
+          type: string
+          enum: [raw_text, github_url, stack_trace]
+        rawInput:
+          type: string
+        githubUrl:
+          type: ["string", "null"]
+        codeContext:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        confidenceScore:
+          type: ["number", "null"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - inputType
+        - rawInput
+        - status
+        - createdAt
+        - updatedAt
+
+    BugAnalysisFull:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        inputType:
+          type: string
+          enum: [raw_text, github_url, stack_trace]
+        rawInput:
+          type: string
+        githubUrl:
+          type: ["string", "null"]
+        codeContext:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        confidenceScore:
+          type: ["number", "null"]
+        extractedEntities:
+          type: ["string", "null"]
+        hypotheses:
+          type: ["string", "null"]
+        reproductionSteps:
+          type: ["string", "null"]
+        testCode:
+          type: ["string", "null"]
+        flowDiagram:
+          type: ["string", "null"]
+        clarifyingQuestions:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - inputType
+        - rawInput
+        - status
+        - createdAt
+        - updatedAt
+
+    CreateAnalysisBody:
+      type: object
+      properties:
+        title:
+          type: string
+        inputType:
+          type: string
+          enum: [raw_text, github_url, stack_trace]
+        rawInput:
+          type: string
+        githubUrl:
+          type: string
+        codeContext:
+          type: string
+      required:
+        - title
+        - inputType
+        - rawInput
+
+    AnalysisStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        completed:
+          type: integer
+        running:
+          type: integer
+        failed:
+          type: integer
+        avgConfidence:
+          type: ["number", "null"]
+      required:
+        - total
+        - completed
+        - running
+        - failed
+        - avgConfidence
+
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
