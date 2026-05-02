@@ -1,0 +1,204 @@
+import { useState } from "react";
+import { Link } from "wouter";
+import { ArrowLeft, FlaskConical, Copy, CheckCheck } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useToast } from "@/hooks/use-toast";
+
+type Nl2TestResult = {
+  testCode: string;
+  framework: string;
+  explanation: string;
+  coverageNotes: string;
+};
+
+const FRAMEWORKS = [
+  { value: "Jest + TypeScript", label: "Jest + TypeScript" },
+  { value: "Jest + JavaScript", label: "Jest + JavaScript" },
+  { value: "Vitest", label: "Vitest" },
+  { value: "Mocha + Chai", label: "Mocha + Chai" },
+  { value: "Pytest", label: "Pytest" },
+  { value: "Cypress", label: "Cypress" },
+  { value: "Playwright", label: "Playwright" },
+  { value: "RSpec", label: "RSpec (Ruby)" },
+  { value: "JUnit", label: "JUnit (Java)" },
+];
+
+export function Nl2TestPage() {
+  const { toast } = useToast();
+  const [description, setDescription] = useState("");
+  const [framework, setFramework] = useState("Jest + TypeScript");
+  const [codeContext, setCodeContext] = useState("");
+  const [result, setResult] = useState<Nl2TestResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleGenerate = async () => {
+    if (!description.trim()) {
+      toast({ variant: "destructive", title: "Description required", description: "Describe what you want to test." });
+      return;
+    }
+
+    setLoading(true);
+    setResult(null);
+
+    try {
+      const res = await fetch("/api/tools/nl2test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description, framework, codeContext: codeContext || undefined }),
+      });
+
+      if (!res.ok) throw new Error("Request failed");
+      const data = await res.json() as Nl2TestResult;
+      setResult(data);
+    } catch {
+      toast({ variant: "destructive", title: "Generation failed", description: "Could not generate test. Try again." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCopy = async () => {
+    if (!result?.testCode) return;
+    await navigator.clipboard.writeText(result.testCode);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="flex items-center gap-3">
+        <Link href="/dashboard">
+          <Button variant="ghost" size="sm" className="gap-2">
+            <ArrowLeft className="w-4 h-4" /> Back
+          </Button>
+        </Link>
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <FlaskConical className="w-6 h-6 text-primary" />
+            NL2Test — Natural Language to Test
+          </h1>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            Describe what you want to test in plain English — get a complete, runnable test case.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-medium">Test Description</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div>
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground mb-2 block">
+                What do you want to test?
+              </Label>
+              <Textarea
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder="e.g. Test what happens when a logged-in user tries to access an admin route — should get 403, not 500"
+                rows={5}
+                className="resize-none"
+              />
+            </div>
+            <div>
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground mb-2 block">
+                Framework
+              </Label>
+              <Select value={framework} onValueChange={setFramework}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {FRAMEWORKS.map(f => (
+                    <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground mb-2 block">
+                Code Context <span className="normal-case text-muted-foreground/60">(optional)</span>
+              </Label>
+              <Textarea
+                value={codeContext}
+                onChange={e => setCodeContext(e.target.value)}
+                placeholder="Paste relevant function signatures, types, or route definitions to make the test more accurate"
+                rows={6}
+                className="font-mono text-xs resize-none"
+              />
+            </div>
+            <Button onClick={handleGenerate} disabled={loading} className="w-full">
+              {loading ? "Generating test..." : "Generate Test Case"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <div className="space-y-4">
+          {loading && (
+            <Card>
+              <CardContent className="py-16 text-center text-muted-foreground">
+                <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-sm">Writing your test case...</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {result && (
+            <>
+              <Card>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base font-medium">Generated Test</CardTitle>
+                    <p className="text-xs text-muted-foreground mt-0.5">Framework: {result.framework}</p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={handleCopy} className="gap-2">
+                    {copied ? <><CheckCheck className="w-4 h-4" /> Copied</> : <><Copy className="w-4 h-4" /> Copy</>}
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  <pre className="text-xs font-mono bg-muted/30 rounded-lg p-4 overflow-auto max-h-80 whitespace-pre-wrap border border-border">
+                    {result.testCode}
+                  </pre>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Explanation</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm leading-relaxed">{result.explanation}</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Coverage Notes</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm leading-relaxed text-muted-foreground">{result.coverageNotes}</p>
+                </CardContent>
+              </Card>
+            </>
+          )}
+
+          {!result && !loading && (
+            <Card className="border-dashed">
+              <CardContent className="py-16 text-center text-muted-foreground">
+                <FlaskConical className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                <p className="text-sm">Your generated test will appear here</p>
+                <p className="text-xs mt-1 opacity-60">Describe what to test, pick a framework, and hit generate</p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

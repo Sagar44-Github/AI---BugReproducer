@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { eq, avg, count, sql, ilike, and, type SQL } from "drizzle-orm";
-import { db, analysesTable } from "@workspace/db";
+import { eq, avg, count, sql, ilike, and, ne, type SQL } from "drizzle-orm";
+import { db, analysesTable, collaborationAnnotationsTable } from "@workspace/db";
 import {
   CreateAnalysisBody,
   GetAnalysisParams,
@@ -8,10 +8,23 @@ import {
   RunAnalysisParams,
   UpdateAnalysisBody,
 } from "@workspace/api-zod";
-import { runBugReproductionPipeline, type AgentEvent } from "../lib/agents";
+import { runBugReproductionPipeline, runCorrelation, type AgentEvent } from "../lib/agents";
 import { logger } from "../lib/logger";
+import type { Response } from "express";
 
 const router: IRouter = Router();
+
+// In-memory SSE clients for collaboration
+const collaborationClients = new Map<number, Set<Response>>();
+
+function broadcastToRoom(analysisId: number, data: unknown) {
+  const clients = collaborationClients.get(analysisId);
+  if (!clients) return;
+  const msg = `data: ${JSON.stringify(data)}\n\n`;
+  for (const res of clients) {
+    res.write(msg);
+  }
+}
 
 // GET /analyses
 router.get("/analyses", async (req, res): Promise<void> => {
@@ -199,12 +212,16 @@ router.get("/analyses/:id/export", async (req, res): Promise<void> => {
     video_description: "Video / Screen Recording",
   };
 
+  const severitySection = analysis.severity
+    ? `**Severity:** ${analysis.severity.toUpperCase()} — ${analysis.severityReason ?? ""}\n`
+    : "";
+
   const md = `# Bug Report: ${analysis.title}
 
 **Source Type:** ${inputTypeLabel[analysis.inputType] ?? analysis.inputType}
 **Status:** ${analysis.status}
 **Confidence:** ${analysis.confidenceScore != null ? `${Math.round(analysis.confidenceScore * 100)}%` : "N/A"}
-**Created:** ${analysis.createdAt.toISOString()}
+${severitySection}**Created:** ${analysis.createdAt.toISOString()}
 ${analysis.tags ? `**Tags:** ${analysis.tags}` : ""}
 
 ---
@@ -255,6 +272,182 @@ ${analysis.flowDiagram ?? "_Not yet analysed_"}
 `;
 
   res.json({ markdown: md, title: analysis.title });
+});
+
+// GET /analyses/:id/correlations
+router.get("/analyses/:id/correlations", async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const params = GetAnalysisParams.safeParse({ id: rawId });
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
+    return;
+  }
+
+  const [target] = await db
+    .select()
+    .from(analysesTable)
+    .where(eq(analysesTable.id, params.data.id));
+
+  if (!target) {
+    res.status(404).json({ error: "Analysis not found" });
+    return;
+  }
+
+  // Return cached correlations if available
+  if (target.correlations) {
+    try {
+      res.json(JSON.parse(target.correlations));
+      return;
+    } catch {
+      // fall through to recompute
+    }
+  }
+
+  // Fetch completed analyses excluding this one
+  const candidates = await db
+    .select({
+      id: analysesTable.id,
+      title: analysesTable.title,
+      rawInput: analysesTable.rawInput,
+      extractedEntities: analysesTable.extractedEntities,
+      createdAt: analysesTable.createdAt,
+    })
+    .from(analysesTable)
+    .where(and(
+      ne(analysesTable.id, params.data.id),
+      eq(analysesTable.status, "completed")
+    ))
+    .orderBy(analysesTable.createdAt);
+
+  if (candidates.length === 0) {
+    res.json([]);
+    return;
+  }
+
+  try {
+    const raw = await runCorrelation(
+      target.rawInput,
+      target.extractedEntities ?? "",
+      candidates
+    );
+
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    const correlations = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(raw);
+
+    // Cache the result
+    await db
+      .update(analysesTable)
+      .set({ correlations: JSON.stringify(correlations), updatedAt: new Date() })
+      .where(eq(analysesTable.id, params.data.id));
+
+    res.json(correlations);
+  } catch (err) {
+    logger.error({ err }, "Correlation error");
+    res.json([]);
+  }
+});
+
+// GET /analyses/:id/annotations
+router.get("/analyses/:id/annotations", async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(rawId, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+
+  const annotations = await db
+    .select()
+    .from(collaborationAnnotationsTable)
+    .where(eq(collaborationAnnotationsTable.analysisId, id))
+    .orderBy(collaborationAnnotationsTable.createdAt);
+
+  res.json(annotations);
+});
+
+// POST /analyses/:id/annotations
+router.post("/analyses/:id/annotations", async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(rawId, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+
+  const [existing] = await db
+    .select({ id: analysesTable.id })
+    .from(analysesTable)
+    .where(eq(analysesTable.id, id));
+
+  if (!existing) {
+    res.status(404).json({ error: "Analysis not found" });
+    return;
+  }
+
+  const { authorName, type, stepRef, content } = req.body as {
+    authorName?: string;
+    type?: string;
+    stepRef?: string;
+    content?: string;
+  };
+
+  if (!authorName || !type || !content) {
+    res.status(400).json({ error: "authorName, type, and content are required" });
+    return;
+  }
+
+  const [annotation] = await db
+    .insert(collaborationAnnotationsTable)
+    .values({
+      analysisId: id,
+      authorName,
+      type: type as "note" | "verified" | "failed" | "question",
+      stepRef: stepRef ?? null,
+      content,
+    })
+    .returning();
+
+  // Broadcast to all collaboration clients
+  broadcastToRoom(id, { type: "annotation", annotation });
+
+  res.status(201).json(annotation);
+});
+
+// GET /analyses/:id/collaborate — SSE for real-time collaboration
+router.get("/analyses/:id/collaborate", async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(rawId, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+
+  if (!collaborationClients.has(id)) {
+    collaborationClients.set(id, new Set());
+  }
+  collaborationClients.get(id)!.add(res);
+
+  // Send connected count
+  const count = collaborationClients.get(id)!.size;
+  res.write(`data: ${JSON.stringify({ type: "connected", collaboratorCount: count })}\n\n`);
+
+  // Send heartbeat every 15s
+  const heartbeat = setInterval(() => {
+    res.write(`data: ${JSON.stringify({ type: "heartbeat" })}\n\n`);
+  }, 15000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    collaborationClients.get(id)?.delete(res);
+    if (collaborationClients.get(id)?.size === 0) {
+      collaborationClients.delete(id);
+    }
+  });
 });
 
 // POST /analyses/:id/run — SSE streaming pipeline
@@ -311,6 +504,10 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
         flowDiagram: result.flowDiagram,
         clarifyingQuestions: result.clarifyingQuestions,
         confidenceScore: result.confidenceScore,
+        confidenceBreakdown: JSON.stringify(result.confidenceBreakdown),
+        severity: result.severity,
+        severityReason: result.severityReason,
+        auditTrail: JSON.stringify(result.auditTrail),
         updatedAt: new Date(),
       })
       .where(eq(analysesTable.id, params.data.id));

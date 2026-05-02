@@ -11,6 +11,9 @@ import { NewAnalysis } from "@/pages/new";
 import { AnalysisDetail } from "@/pages/detail";
 import { ExportPage } from "@/pages/export";
 import { Settings } from "@/pages/settings";
+import { EnvDiffPage } from "@/pages/env-diff";
+import { Nl2TestPage } from "@/pages/nl2test";
+import { FlakyDetectorPage } from "@/pages/flaky-detector";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -25,6 +28,9 @@ function Router() {
       <Route path="/analyses/:id/export" component={ExportPage} />
       <Route path="/analyses/:id" component={AnalysisDetail} />
       <Route path="/settings" component={Settings} />
+      <Route path="/tools/env-diff" component={EnvDiffPage} />
+      <Route path="/tools/nl2test" component={Nl2TestPage} />
+      <Route path="/tools/flaky-detector" component={FlakyDetectorPage} />
       <Route component={NotFound} />
     </Switch>
   );

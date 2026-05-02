@@ -33,6 +33,20 @@ export const BugAnalysisStatus = {
   failed: "failed",
 } as const;
 
+/**
+ * @nullable
+ */
+export type BugAnalysisSeverity =
+  | (typeof BugAnalysisSeverity)[keyof typeof BugAnalysisSeverity]
+  | null;
+
+export const BugAnalysisSeverity = {
+  critical: "critical",
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
 export interface BugAnalysis {
   id: number;
   title: string;
@@ -45,6 +59,10 @@ export interface BugAnalysis {
   status: BugAnalysisStatus;
   /** @nullable */
   confidenceScore?: number | null;
+  /** @nullable */
+  severity?: BugAnalysisSeverity;
+  /** @nullable */
+  severityReason?: string | null;
   /** @nullable */
   tags?: string | null;
   createdAt: string;
@@ -75,6 +93,20 @@ export const BugAnalysisFullStatus = {
   failed: "failed",
 } as const;
 
+/**
+ * @nullable
+ */
+export type BugAnalysisFullSeverity =
+  | (typeof BugAnalysisFullSeverity)[keyof typeof BugAnalysisFullSeverity]
+  | null;
+
+export const BugAnalysisFullSeverity = {
+  critical: "critical",
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
 export interface BugAnalysisFull {
   id: number;
   title: string;
@@ -87,6 +119,16 @@ export interface BugAnalysisFull {
   status: BugAnalysisFullStatus;
   /** @nullable */
   confidenceScore?: number | null;
+  /** @nullable */
+  confidenceBreakdown?: string | null;
+  /** @nullable */
+  severity?: BugAnalysisFullSeverity;
+  /** @nullable */
+  severityReason?: string | null;
+  /** @nullable */
+  auditTrail?: string | null;
+  /** @nullable */
+  correlations?: string | null;
   /** @nullable */
   tags?: string | null;
   /** @nullable */
@@ -153,6 +195,175 @@ export interface AnalysisStats {
 export interface ExportAnalysisResponse {
   markdown: string;
   title: string;
+}
+
+export interface CorrelationMatch {
+  id: number;
+  title: string;
+  /** Similarity percentage 0-100 */
+  similarity: number;
+  commonFactors: string[];
+  rootCauseNote: string;
+  createdAt: string;
+}
+
+export type CollaborationAnnotationType =
+  (typeof CollaborationAnnotationType)[keyof typeof CollaborationAnnotationType];
+
+export const CollaborationAnnotationType = {
+  note: "note",
+  verified: "verified",
+  failed: "failed",
+  question: "question",
+} as const;
+
+export interface CollaborationAnnotation {
+  id: number;
+  analysisId: number;
+  authorName: string;
+  type: CollaborationAnnotationType;
+  /** @nullable */
+  stepRef?: string | null;
+  content: string;
+  createdAt: string;
+}
+
+export type CreateAnnotationBodyType =
+  (typeof CreateAnnotationBodyType)[keyof typeof CreateAnnotationBodyType];
+
+export const CreateAnnotationBodyType = {
+  note: "note",
+  verified: "verified",
+  failed: "failed",
+  question: "question",
+} as const;
+
+export interface CreateAnnotationBody {
+  authorName: string;
+  type: CreateAnnotationBodyType;
+  stepRef?: string;
+  content: string;
+}
+
+export interface EnvDiffBody {
+  /** First environment config (key=value lines or JSON) */
+  env1: string;
+  /** Second environment config (key=value lines or JSON) */
+  env2: string;
+  /** Description of the bug or intermittent behavior */
+  bugDescription: string;
+  /** Label for first environment (e.g. "Local", "Staging") */
+  label1?: string;
+  /** Label for second environment (e.g. "Production", "CI") */
+  label2?: string;
+}
+
+export type EnvDiffResultLikelihood =
+  (typeof EnvDiffResultLikelihood)[keyof typeof EnvDiffResultLikelihood];
+
+export const EnvDiffResultLikelihood = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+export type EnvDifferenceImpact =
+  (typeof EnvDifferenceImpact)[keyof typeof EnvDifferenceImpact];
+
+export const EnvDifferenceImpact = {
+  critical: "critical",
+  likely: "likely",
+  unlikely: "unlikely",
+  irrelevant: "irrelevant",
+} as const;
+
+export interface EnvDifference {
+  key: string;
+  /** @nullable */
+  value1: string | null;
+  /** @nullable */
+  value2: string | null;
+  impact: EnvDifferenceImpact;
+  reasoning: string;
+}
+
+export interface EnvDiffResult {
+  differences: EnvDifference[];
+  /** AI verdict on the most likely culprit */
+  verdict: string;
+  likelihood: EnvDiffResultLikelihood;
+  summary: string;
+}
+
+export interface Nl2TestBody {
+  /** Natural language description of what to test */
+  description: string;
+  /** Test framework hint (e.g. Jest, Pytest, Mocha, Cypress) */
+  framework?: string;
+  /** Optional relevant code context */
+  codeContext?: string;
+}
+
+export interface Nl2TestResult {
+  testCode: string;
+  framework: string;
+  explanation: string;
+  coverageNotes: string;
+}
+
+export interface FlakyDetectorBody {
+  /** The test suite or individual test code to analyze */
+  testCode: string;
+  /** Language/framework hint */
+  language?: string;
+  /** Optional number of times the test has been run */
+  runCount?: number;
+}
+
+export type FlakyDetectorResultOverallRisk =
+  (typeof FlakyDetectorResultOverallRisk)[keyof typeof FlakyDetectorResultOverallRisk];
+
+export const FlakyDetectorResultOverallRisk = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+  none: "none",
+} as const;
+
+export type FlakyTestRiskLevel =
+  (typeof FlakyTestRiskLevel)[keyof typeof FlakyTestRiskLevel];
+
+export const FlakyTestRiskLevel = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+export type FlakyTestCategory =
+  (typeof FlakyTestCategory)[keyof typeof FlakyTestCategory];
+
+export const FlakyTestCategory = {
+  race_condition: "race_condition",
+  environment_dependency: "environment_dependency",
+  non_deterministic_data: "non_deterministic_data",
+  timing: "timing",
+  external_dependency: "external_dependency",
+  state_leak: "state_leak",
+  other: "other",
+} as const;
+
+export interface FlakyTest {
+  testName: string;
+  riskLevel: FlakyTestRiskLevel;
+  category: FlakyTestCategory;
+  explanation: string;
+  fix: string;
+}
+
+export interface FlakyDetectorResult {
+  flakyTests: FlakyTest[];
+  overallRisk: FlakyDetectorResultOverallRisk;
+  summary: string;
 }
 
 export interface FetchGithubIssueBody {

@@ -21,12 +21,21 @@ import type {
   ApiError,
   BugAnalysis,
   BugAnalysisFull,
+  CollaborationAnnotation,
+  CorrelationMatch,
   CreateAnalysisBody,
+  CreateAnnotationBody,
+  EnvDiffBody,
+  EnvDiffResult,
   ExportAnalysisResponse,
   FetchGithubIssueBody,
+  FlakyDetectorBody,
+  FlakyDetectorResult,
   GithubIssueContent,
   HealthStatus,
   ListAnalysesParams,
+  Nl2TestBody,
+  Nl2TestResult,
   UpdateAnalysisBody,
 } from "./api.schemas";
 
@@ -729,6 +738,267 @@ export function useExportAnalysis<
 }
 
 /**
+ * @summary Find similar bugs from past analyses
+ */
+export const getGetCorrelationsUrl = (id: number) => {
+  return `/api/analyses/${id}/correlations`;
+};
+
+export const getCorrelations = async (
+  id: number,
+  options?: RequestInit,
+): Promise<CorrelationMatch[]> => {
+  return customFetch<CorrelationMatch[]>(getGetCorrelationsUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetCorrelationsQueryKey = (id: number) => {
+  return [`/api/analyses/${id}/correlations`] as const;
+};
+
+export const getGetCorrelationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCorrelations>>,
+  TError = ErrorType<ApiError>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCorrelations>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetCorrelationsQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getCorrelations>>> = ({
+    signal,
+  }) => getCorrelations(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCorrelations>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetCorrelationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCorrelations>>
+>;
+export type GetCorrelationsQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Find similar bugs from past analyses
+ */
+
+export function useGetCorrelations<
+  TData = Awaited<ReturnType<typeof getCorrelations>>,
+  TError = ErrorType<ApiError>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCorrelations>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetCorrelationsQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List collaboration annotations for an analysis
+ */
+export const getListAnnotationsUrl = (id: number) => {
+  return `/api/analyses/${id}/annotations`;
+};
+
+export const listAnnotations = async (
+  id: number,
+  options?: RequestInit,
+): Promise<CollaborationAnnotation[]> => {
+  return customFetch<CollaborationAnnotation[]>(getListAnnotationsUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListAnnotationsQueryKey = (id: number) => {
+  return [`/api/analyses/${id}/annotations`] as const;
+};
+
+export const getListAnnotationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAnnotations>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAnnotations>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListAnnotationsQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listAnnotations>>> = ({
+    signal,
+  }) => listAnnotations(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAnnotations>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListAnnotationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAnnotations>>
+>;
+export type ListAnnotationsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List collaboration annotations for an analysis
+ */
+
+export function useListAnnotations<
+  TData = Awaited<ReturnType<typeof listAnnotations>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAnnotations>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListAnnotationsQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Add a collaboration annotation
+ */
+export const getCreateAnnotationUrl = (id: number) => {
+  return `/api/analyses/${id}/annotations`;
+};
+
+export const createAnnotation = async (
+  id: number,
+  createAnnotationBody: CreateAnnotationBody,
+  options?: RequestInit,
+): Promise<CollaborationAnnotation> => {
+  return customFetch<CollaborationAnnotation>(getCreateAnnotationUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createAnnotationBody),
+  });
+};
+
+export const getCreateAnnotationMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createAnnotation>>,
+    TError,
+    { id: number; data: BodyType<CreateAnnotationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createAnnotation>>,
+  TError,
+  { id: number; data: BodyType<CreateAnnotationBody> },
+  TContext
+> => {
+  const mutationKey = ["createAnnotation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createAnnotation>>,
+    { id: number; data: BodyType<CreateAnnotationBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return createAnnotation(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateAnnotationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createAnnotation>>
+>;
+export type CreateAnnotationMutationBody = BodyType<CreateAnnotationBody>;
+export type CreateAnnotationMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Add a collaboration annotation
+ */
+export const useCreateAnnotation = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createAnnotation>>,
+    TError,
+    { id: number; data: BodyType<CreateAnnotationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createAnnotation>>,
+  TError,
+  { id: number; data: BodyType<CreateAnnotationBody> },
+  TContext
+> => {
+  return useMutation(getCreateAnnotationMutationOptions(options));
+};
+
+/**
  * @summary Get summary stats across all analyses
  */
 export const getGetAnalysisStatsUrl = () => {
@@ -887,4 +1157,262 @@ export const useFetchGithubIssue = <
   TContext
 > => {
   return useMutation(getFetchGithubIssueMutationOptions(options));
+};
+
+/**
+ * @summary Compare two environment configs and identify bug-causing differences
+ */
+export const getEnvDiffUrl = () => {
+  return `/api/tools/env-diff`;
+};
+
+export const envDiff = async (
+  envDiffBody: EnvDiffBody,
+  options?: RequestInit,
+): Promise<EnvDiffResult> => {
+  return customFetch<EnvDiffResult>(getEnvDiffUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(envDiffBody),
+  });
+};
+
+export const getEnvDiffMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof envDiff>>,
+    TError,
+    { data: BodyType<EnvDiffBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof envDiff>>,
+  TError,
+  { data: BodyType<EnvDiffBody> },
+  TContext
+> => {
+  const mutationKey = ["envDiff"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof envDiff>>,
+    { data: BodyType<EnvDiffBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return envDiff(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type EnvDiffMutationResult = NonNullable<
+  Awaited<ReturnType<typeof envDiff>>
+>;
+export type EnvDiffMutationBody = BodyType<EnvDiffBody>;
+export type EnvDiffMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Compare two environment configs and identify bug-causing differences
+ */
+export const useEnvDiff = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof envDiff>>,
+    TError,
+    { data: BodyType<EnvDiffBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof envDiff>>,
+  TError,
+  { data: BodyType<EnvDiffBody> },
+  TContext
+> => {
+  return useMutation(getEnvDiffMutationOptions(options));
+};
+
+/**
+ * @summary Generate a test case from a natural language description
+ */
+export const getNl2testUrl = () => {
+  return `/api/tools/nl2test`;
+};
+
+export const nl2test = async (
+  nl2TestBody: Nl2TestBody,
+  options?: RequestInit,
+): Promise<Nl2TestResult> => {
+  return customFetch<Nl2TestResult>(getNl2testUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(nl2TestBody),
+  });
+};
+
+export const getNl2testMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof nl2test>>,
+    TError,
+    { data: BodyType<Nl2TestBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof nl2test>>,
+  TError,
+  { data: BodyType<Nl2TestBody> },
+  TContext
+> => {
+  const mutationKey = ["nl2test"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof nl2test>>,
+    { data: BodyType<Nl2TestBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return nl2test(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type Nl2testMutationResult = NonNullable<
+  Awaited<ReturnType<typeof nl2test>>
+>;
+export type Nl2testMutationBody = BodyType<Nl2TestBody>;
+export type Nl2testMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Generate a test case from a natural language description
+ */
+export const useNl2test = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof nl2test>>,
+    TError,
+    { data: BodyType<Nl2TestBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof nl2test>>,
+  TError,
+  { data: BodyType<Nl2TestBody> },
+  TContext
+> => {
+  return useMutation(getNl2testMutationOptions(options));
+};
+
+/**
+ * @summary Detect flaky tests and explain why they are flaky
+ */
+export const getFlakyDetectorUrl = () => {
+  return `/api/tools/flaky-detector`;
+};
+
+export const flakyDetector = async (
+  flakyDetectorBody: FlakyDetectorBody,
+  options?: RequestInit,
+): Promise<FlakyDetectorResult> => {
+  return customFetch<FlakyDetectorResult>(getFlakyDetectorUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(flakyDetectorBody),
+  });
+};
+
+export const getFlakyDetectorMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof flakyDetector>>,
+    TError,
+    { data: BodyType<FlakyDetectorBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof flakyDetector>>,
+  TError,
+  { data: BodyType<FlakyDetectorBody> },
+  TContext
+> => {
+  const mutationKey = ["flakyDetector"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof flakyDetector>>,
+    { data: BodyType<FlakyDetectorBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return flakyDetector(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type FlakyDetectorMutationResult = NonNullable<
+  Awaited<ReturnType<typeof flakyDetector>>
+>;
+export type FlakyDetectorMutationBody = BodyType<FlakyDetectorBody>;
+export type FlakyDetectorMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Detect flaky tests and explain why they are flaky
+ */
+export const useFlakyDetector = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof flakyDetector>>,
+    TError,
+    { data: BodyType<FlakyDetectorBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof flakyDetector>>,
+  TError,
+  { data: BodyType<FlakyDetectorBody> },
+  TContext
+> => {
+  return useMutation(getFlakyDetectorMutationOptions(options));
 };

@@ -1,27 +1,38 @@
-import { useState, useRef, useEffect } from "react";
-import { useRoute, Link, useSearch, useLocation } from "wouter";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useRoute, Link, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { 
-  useGetAnalysis, 
-  getGetAnalysisQueryKey, 
-  useDeleteAnalysis 
+import {
+  useGetAnalysis,
+  getGetAnalysisQueryKey,
+  useDeleteAnalysis
 } from "@workspace/api-client-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
-  ArrowLeft, BugPlay, Loader2, CheckCircle2, AlertCircle, 
-  Code2, GitMerge, Search, FileText, Trash2, StopCircle
+import {
+  ArrowLeft, BugPlay, Loader2, CheckCircle2, AlertCircle,
+  Code2, GitMerge, Search, FileText, Trash2, StopCircle,
+  ShieldAlert, ShieldCheck, ShieldQuestion, Shield,
+  ChevronDown, ChevronUp, Users, MessageSquare, Clock,
+  Network, CheckCheck, XCircle, HelpCircle, PenLine,
+  RefreshCw, Send
 } from "lucide-react";
 import { format } from "date-fns";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { StatusBadge } from "@/components/status-badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
+  AlertDialogTitle, AlertDialogTrigger
+} from "@/components/ui/alert-dialog";
 
 type AgentEvent = {
   type: "agent_start" | "agent_output" | "agent_done" | "pipeline_done" | "error";
@@ -33,6 +44,54 @@ type AgentState = {
   name: string;
   status: "pending" | "running" | "completed" | "error";
   output: string;
+};
+
+type ConfidenceBreakdown = {
+  score: number;
+  evidence: string[];
+  assumptions: string[];
+  missing: string[];
+};
+
+type AuditEntry = {
+  timestamp: string;
+  agent: string;
+  action: string;
+  decision: string;
+  rationale: string;
+};
+
+type CorrelationMatch = {
+  id: number;
+  title: string;
+  similarity: number;
+  commonFactors: string[];
+  rootCauseNote: string;
+  createdAt: string;
+};
+
+type Annotation = {
+  id: number;
+  analysisId: number;
+  authorName: string;
+  type: "note" | "verified" | "failed" | "question";
+  stepRef: string | null;
+  content: string;
+  createdAt: string;
+};
+
+const SEVERITY_CONFIG = {
+  critical: { label: "Critical", color: "text-red-400", bg: "bg-red-500/10 border-red-500/30", Icon: ShieldAlert },
+  high: { label: "High", color: "text-orange-400", bg: "bg-orange-500/10 border-orange-500/30", Icon: ShieldAlert },
+  medium: { label: "Medium", color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/30", Icon: ShieldQuestion },
+  low: { label: "Low", color: "text-green-400", bg: "bg-green-500/10 border-green-500/30", Icon: ShieldCheck },
+};
+
+const ANNOTATION_CONFIG = {
+  note: { label: "Note", icon: PenLine, color: "text-blue-400" },
+  verified: { label: "Verified", icon: CheckCheck, color: "text-green-400" },
+  failed: { label: "Failed", icon: XCircle, color: "text-red-400" },
+  question: { label: "Question", icon: HelpCircle, color: "text-amber-400" },
 };
 
 export function AnalysisDetail() {
@@ -52,16 +111,119 @@ export function AnalysisDetail() {
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
   const [pipelineError, setPipelineError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const search = useSearch();
-  const autoRunTriggered = useRef(false);
+
+  // Confidence breakdown
+  const [showConfidenceDetails, setShowConfidenceDetails] = useState(false);
+  const confidenceBreakdown: ConfidenceBreakdown | null = (() => {
+    try { return analysis?.confidenceBreakdown ? JSON.parse(analysis.confidenceBreakdown) : null; } catch { return null; }
+  })();
+
+  // Audit trail
+  const auditTrail: AuditEntry[] = (() => {
+    try { return analysis?.auditTrail ? JSON.parse(analysis.auditTrail) : []; } catch { return []; }
+  })();
+
+  // Correlations
+  const [correlations, setCorrelations] = useState<CorrelationMatch[]>([]);
+  const [correlationsLoading, setCorrelationsLoading] = useState(false);
+  const [correlationsFetched, setCorrelationsFetched] = useState(false);
+
+  const fetchCorrelations = useCallback(async () => {
+    if (!id || correlationsFetched) return;
+    setCorrelationsLoading(true);
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/analyses/${id}/correlations`);
+      const data = await res.json() as CorrelationMatch[];
+      setCorrelations(data);
+    } catch {
+      // ignore
+    } finally {
+      setCorrelationsLoading(false);
+      setCorrelationsFetched(true);
+    }
+  }, [id, correlationsFetched]);
+
+  // Collaboration
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [annotationsLoaded, setAnnotationsLoaded] = useState(false);
+  const [collaboratorCount, setCollaboratorCount] = useState(1);
+  const [authorName, setAuthorName] = useState("You");
+  const [annotationType, setAnnotationType] = useState<"note" | "verified" | "failed" | "question">("note");
+  const [annotationContent, setAnnotationContent] = useState("");
+  const [annotationStepRef, setAnnotationStepRef] = useState("");
+  const [submittingAnnotation, setSubmittingAnnotation] = useState(false);
+  const collaborateSSERef = useRef<EventSource | null>(null);
+
+  const loadAnnotations = useCallback(async () => {
+    if (!id || annotationsLoaded) return;
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/analyses/${id}/annotations`);
+      const data = await res.json() as Annotation[];
+      setAnnotations(data);
+      setAnnotationsLoaded(true);
+    } catch {
+      // ignore
+    }
+  }, [id, annotationsLoaded]);
+
+  const connectCollaboration = useCallback(() => {
+    if (collaborateSSERef.current) return;
+    const es = new EventSource(`${import.meta.env.BASE_URL}api/analyses/${id}/collaborate`);
+    collaborateSSERef.current = es;
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "connected") setCollaboratorCount(data.collaboratorCount);
+        if (data.type === "annotation") {
+          setAnnotations(prev => [...prev, data.annotation as Annotation]);
+        }
+      } catch { /* ignore */ }
+    };
+    es.onerror = () => {
+      es.close();
+      collaborateSSERef.current = null;
+    };
+  }, [id]);
+
+  useEffect(() => {
+    return () => {
+      collaborateSSERef.current?.close();
+    };
+  }, []);
+
+  const submitAnnotation = async () => {
+    if (!annotationContent.trim()) return;
+    setSubmittingAnnotation(true);
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/analyses/${id}/annotations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          authorName: authorName.trim() || "Anonymous",
+          type: annotationType,
+          stepRef: annotationStepRef.trim() || undefined,
+          content: annotationContent.trim(),
+        }),
+      });
+      if (res.ok) {
+        const annotation = await res.json() as Annotation;
+        setAnnotations(prev => [...prev, annotation]);
+        setAnnotationContent("");
+        setAnnotationStepRef("");
+        toast({ title: "Annotation added" });
+      }
+    } catch {
+      toast({ variant: "destructive", title: "Failed to add annotation" });
+    } finally {
+      setSubmittingAnnotation(false);
+    }
+  };
 
   const startPipeline = async () => {
     if (isRunning) return;
-    
     setIsRunning(true);
     setAgents({});
     setPipelineError(null);
-    
     abortControllerRef.current = new AbortController();
 
     try {
@@ -70,9 +232,7 @@ export function AnalysisDetail() {
         signal: abortControllerRef.current.signal
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to start pipeline: ${response.statusText}`);
-      }
+      if (!response.ok) throw new Error(`Failed to start pipeline: ${response.statusText}`);
 
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
@@ -81,7 +241,7 @@ export function AnalysisDetail() {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
+
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
@@ -90,14 +250,12 @@ export function AnalysisDetail() {
           if (line.startsWith("data: ")) {
             try {
               const event: AgentEvent = JSON.parse(line.slice(6));
-              
+
               if (event.type === "pipeline_done") {
                 queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(id) });
                 setIsRunning(false);
-                toast({
-                  title: "Pipeline Complete",
-                  description: "Bug reproduction analysis finished successfully.",
-                });
+                setCorrelationsFetched(false);
+                toast({ title: "Pipeline Complete", description: "Bug reproduction analysis finished successfully." });
                 break;
               }
 
@@ -110,50 +268,29 @@ export function AnalysisDetail() {
 
               if (event.agentName) {
                 setAgents(prev => {
-                  const currentState = prev[event.agentName] || { 
-                    name: event.agentName, 
-                    status: "pending", 
-                    output: "" 
-                  };
-
-                  let newStatus = currentState.status;
-                  let newOutput = currentState.output;
-
-                  if (event.type === "agent_start") newStatus = "running";
-                  else if (event.type === "agent_output") {
-                    newStatus = "running";
-                    newOutput += event.content;
-                  }
-                  else if (event.type === "agent_done") newStatus = "completed";
-                  else if (event.type === "error") newStatus = "error";
-
+                  const cur = prev[event.agentName] || { name: event.agentName, status: "pending" as const, output: "" };
                   return {
                     ...prev,
                     [event.agentName]: {
-                      ...currentState,
-                      status: newStatus,
-                      output: newOutput
+                      ...cur,
+                      status: event.type === "agent_start" ? "running"
+                        : event.type === "agent_done" ? "completed"
+                        : event.type === "error" ? "error"
+                        : "running",
+                      output: event.type === "agent_output" ? cur.output + event.content : cur.output,
                     }
                   };
                 });
               }
-
-            } catch (e) {
-              console.error("Error parsing SSE event:", e);
-            }
+            } catch { /* ignore parse errors */ }
           }
         }
       }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-         console.log("Pipeline aborted");
-      } else {
-         setPipelineError(err.message || "An unexpected error occurred");
-         toast({
-           variant: "destructive",
-           title: "Pipeline Error",
-           description: err.message || "Failed to run analysis pipeline",
-         });
+    } catch (err: unknown) {
+      const e = err as { name?: string; message?: string };
+      if (e.name !== "AbortError") {
+        setPipelineError(e.message || "An unexpected error occurred");
+        toast({ variant: "destructive", title: "Pipeline Error", description: e.message || "Failed to run analysis pipeline" });
       }
       setIsRunning(false);
       queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(id) });
@@ -161,56 +298,31 @@ export function AnalysisDetail() {
   };
 
   const stopPipeline = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsRunning(false);
-      toast({
-        title: "Pipeline Stopped",
-        description: "The analysis run was manually cancelled.",
-      });
-    }
+    abortControllerRef.current?.abort();
+    setIsRunning(false);
+    toast({ title: "Pipeline Stopped", description: "The analysis run was manually cancelled." });
   };
 
   const handleDelete = () => {
-    deleteAnalysis.mutate(
-      { id },
-      {
-        onSuccess: () => {
-          toast({ title: "Analysis deleted" });
-          setLocation("/");
-        },
-        onError: (err) => {
-          toast({
-            variant: "destructive",
-            title: "Error deleting analysis",
-            description: (err as unknown as { error?: string }).error || "Unknown error"
-          });
-        }
+    deleteAnalysis.mutate({ id }, {
+      onSuccess: () => { toast({ title: "Analysis deleted" }); setLocation("/dashboard"); },
+      onError: (err) => {
+        toast({ variant: "destructive", title: "Error deleting", description: (err as unknown as { error?: string }).error || "Unknown error" });
       }
-    );
+    });
   };
 
-  // Auto-scroll outputs
   const outputEndRefs = useRef<Record<string, HTMLDivElement | null>>({});
-
   useEffect(() => {
     Object.values(agents).forEach(agent => {
-      if (agent.status === "running" && outputEndRefs.current[agent.name]) {
-        outputEndRefs.current[agent.name]?.scrollIntoView({ behavior: "smooth" });
-      }
+      if (agent.status === "running") outputEndRefs.current[agent.name]?.scrollIntoView({ behavior: "smooth" });
     });
   }, [agents]);
 
   if (isLoading) {
     return (
       <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex gap-4">
-          <Skeleton className="w-8 h-8 rounded-md" />
-          <div className="space-y-2 flex-1">
-            <Skeleton className="h-8 w-1/3" />
-            <Skeleton className="h-4 w-1/4" />
-          </div>
-        </div>
+        <div className="flex gap-4"><Skeleton className="w-8 h-8 rounded-md" /><div className="space-y-2 flex-1"><Skeleton className="h-8 w-1/3" /><Skeleton className="h-4 w-1/4" /></div></div>
         <Skeleton className="h-48 w-full" />
         <Skeleton className="h-96 w-full" />
       </div>
@@ -223,97 +335,161 @@ export function AnalysisDetail() {
         <AlertCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
         <h2 className="text-2xl font-bold">Analysis Not Found</h2>
         <p className="text-muted-foreground mt-2 mb-6">This analysis might have been deleted or doesn't exist.</p>
-        <Link href="/">
-          <Button variant="outline">Return to Dashboard</Button>
-        </Link>
+        <Link href="/dashboard"><Button variant="outline">Return to Dashboard</Button></Link>
       </div>
     );
   }
 
   const hasResults = analysis.status === "completed" || analysis.status === "failed";
   const agentList = Object.values(agents);
+  const severityCfg = analysis.severity ? SEVERITY_CONFIG[analysis.severity as keyof typeof SEVERITY_CONFIG] : null;
 
   return (
     <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16">
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
         <div className="flex gap-4 items-start flex-1 min-w-0">
-          <Link href="/">
-            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 mt-1">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
+          <Link href="/dashboard">
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 mt-1"><ArrowLeft className="h-4 w-4" /></Button>
           </Link>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-3 mb-2 flex-wrap">
               <h1 className="text-2xl font-bold tracking-tight truncate">{analysis.title}</h1>
               <StatusBadge status={analysis.status} />
+              {severityCfg && (
+                <Badge variant="outline" className={`border text-xs ${severityCfg.bg} ${severityCfg.color}`}>
+                  <severityCfg.Icon className="w-3 h-3 mr-1" />
+                  {severityCfg.label}
+                </Badge>
+              )}
               {analysis.confidenceScore != null && (
                 <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs">
-                  Confidence: {Math.round(analysis.confidenceScore * 100)}%
+                  {Math.round(analysis.confidenceScore * 100)}% confidence
                 </Badge>
               )}
             </div>
-            <div className="text-sm text-muted-foreground flex items-center gap-4">
-              <span>{analysis.inputType.replace("_", " ")}</span>
+            <div className="text-sm text-muted-foreground flex items-center gap-4 flex-wrap">
+              <span>{analysis.inputType.replace(/_/g, " ")}</span>
               <span>•</span>
               <span>{format(new Date(analysis.createdAt), "PP pp")}</span>
+              {analysis.severityReason && severityCfg && (
+                <><span>•</span><span className={`text-xs ${severityCfg.color}`}>{analysis.severityReason}</span></>
+              )}
             </div>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-2 shrink-0 self-end md:self-start mt-2 md:mt-0">
+          {hasResults && (
+            <Link href={`/analyses/${id}/export`}>
+              <Button variant="outline" size="sm" className="gap-2"><FileText className="w-4 h-4" />Report</Button>
+            </Link>
+          )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="outline" size="sm" className="text-destructive hover:bg-destructive/10 border-destructive/20">
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete
+                <Trash2 className="w-4 h-4 mr-2" />Delete
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>Delete Analysis</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Are you sure you want to delete this analysis? This action cannot be undone.
-                </AlertDialogDescription>
+                <AlertDialogDescription>Are you sure you want to delete this analysis? This action cannot be undone.</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                  Delete
-                </AlertDialogAction>
+                <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-          
+
           {!isRunning ? (
-            <Button 
-              onClick={startPipeline} 
-              className="font-mono bg-primary text-primary-foreground hover:bg-primary/90"
-            >
+            <Button onClick={startPipeline} className="font-mono bg-primary text-primary-foreground hover:bg-primary/90">
               <BugPlay className="w-4 h-4 mr-2" />
               {hasResults ? "Rerun Pipeline" : "Run Pipeline"}
             </Button>
           ) : (
-            <Button 
-              onClick={stopPipeline} 
-              variant="destructive"
-              className="font-mono"
-            >
-              <StopCircle className="w-4 h-4 mr-2" />
-              Stop Run
+            <Button onClick={stopPipeline} variant="destructive" className="font-mono">
+              <StopCircle className="w-4 h-4 mr-2" />Stop Run
             </Button>
           )}
         </div>
       </div>
 
+      {/* Confidence Breakdown (Feature 1) */}
+      {confidenceBreakdown && (
+        <Card className="border-primary/20">
+          <button
+            className="w-full px-5 py-4 flex items-center justify-between text-left"
+            onClick={() => setShowConfidenceDetails(v => !v)}
+          >
+            <div className="flex items-center gap-3">
+              <Shield className="w-5 h-5 text-primary" />
+              <div>
+                <span className="font-semibold text-sm">Confidence Breakdown</span>
+                <span className="text-muted-foreground text-sm ml-2">{confidenceBreakdown.score}% — why this score was given</span>
+              </div>
+            </div>
+            {showConfidenceDetails ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          </button>
+          <AnimatePresence>
+            {showConfidenceDetails && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="overflow-hidden border-t border-border/50"
+              >
+                <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <h4 className="text-xs uppercase tracking-wider font-semibold text-green-400 mb-2">Supporting Evidence</h4>
+                    <ul className="space-y-1.5">
+                      {confidenceBreakdown.evidence.map((e, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0 mt-0.5" />
+                          {e}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="text-xs uppercase tracking-wider font-semibold text-amber-400 mb-2">Assumptions Made</h4>
+                    <ul className="space-y-1.5">
+                      {confidenceBreakdown.assumptions.map((a, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                          {a}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="text-xs uppercase tracking-wider font-semibold text-red-400 mb-2">Missing Information</h4>
+                    <ul className="space-y-1.5">
+                      {confidenceBreakdown.missing.map((m, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                          <Search className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+                          {m}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </Card>
+      )}
+
+      {/* Original Input */}
       <Card className="bg-card border-border/50 shadow-sm">
         <CardHeader className="pb-3 border-b border-border/50">
           <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Original Context</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           <ScrollArea className="max-h-64 bg-black/40 rounded-b-lg">
-            <div className="p-4 font-mono text-sm whitespace-pre-wrap text-muted-foreground">
-              {analysis.rawInput}
-            </div>
+            <div className="p-4 font-mono text-sm whitespace-pre-wrap text-muted-foreground">{analysis.rawInput}</div>
           </ScrollArea>
         </CardContent>
       </Card>
@@ -325,37 +501,26 @@ export function AnalysisDetail() {
             <Search className="w-5 h-5 text-primary" />
             Pipeline Execution
           </h2>
-          
           <div className="grid gap-4">
             <AnimatePresence initial={false}>
               {agentList.map((agent) => (
-                <motion.div
-                  key={agent.name}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <Card className={`border-border/50 overflow-hidden ${agent.status === 'running' ? 'ring-1 ring-primary/50' : ''}`}>
+                <motion.div key={agent.name} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+                  <Card className={`border-border/50 overflow-hidden ${agent.status === "running" ? "ring-1 ring-primary/50" : ""}`}>
                     <div className="bg-muted/30 px-4 py-3 flex items-center justify-between border-b border-border/50">
                       <div className="flex items-center gap-2 font-mono text-sm font-semibold">
-                        <Code2 className="w-4 h-4 text-primary" />
-                        {agent.name}
+                        <Code2 className="w-4 h-4 text-primary" />{agent.name}
                       </div>
                       <div className="flex items-center gap-2">
                         {agent.status === "running" && <Loader2 className="w-4 h-4 text-primary animate-spin" />}
                         {agent.status === "completed" && <CheckCircle2 className="w-4 h-4 text-green-500" />}
                         {agent.status === "error" && <AlertCircle className="w-4 h-4 text-destructive" />}
-                        <span className="text-xs uppercase tracking-wider text-muted-foreground font-mono">
-                          {agent.status}
-                        </span>
+                        <span className="text-xs uppercase tracking-wider text-muted-foreground font-mono">{agent.status}</span>
                       </div>
                     </div>
                     {agent.output && (
                       <div className="bg-[#0a0a0a] p-4 text-xs font-mono text-gray-300 whitespace-pre-wrap max-h-[300px] overflow-y-auto">
                         {agent.output}
-                        {agent.status === "running" && (
-                          <span className="inline-block w-2 h-3 ml-1 bg-primary animate-pulse" />
-                        )}
+                        {agent.status === "running" && <span className="inline-block w-2 h-3 ml-1 bg-primary animate-pulse" />}
                         <div ref={el => { outputEndRefs.current[agent.name] = el; }} />
                       </div>
                     )}
@@ -363,15 +528,12 @@ export function AnalysisDetail() {
                 </motion.div>
               ))}
             </AnimatePresence>
-            
             {pipelineError && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                 <Card className="border-destructive/50 bg-destructive/10">
                   <CardContent className="p-4 flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
-                    <div className="text-sm font-mono text-destructive-foreground whitespace-pre-wrap">
-                      {pipelineError}
-                    </div>
+                    <div className="text-sm font-mono text-destructive-foreground whitespace-pre-wrap">{pipelineError}</div>
                   </CardContent>
                 </Card>
               </motion.div>
@@ -387,16 +549,21 @@ export function AnalysisDetail() {
             <FileText className="w-5 h-5 text-primary" />
             Analysis Results
           </h2>
-          
+
           <Tabs defaultValue="steps" className="w-full">
-            <TabsList className="w-full grid grid-cols-2 md:grid-cols-5 bg-card border border-border/50 h-auto p-1 gap-1">
-              <TabsTrigger value="steps" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Reproduction</TabsTrigger>
+            <TabsList className="w-full grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 bg-card border border-border/50 h-auto p-1 gap-1">
+              <TabsTrigger value="steps" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Repro</TabsTrigger>
               <TabsTrigger value="test" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Test Code</TabsTrigger>
               <TabsTrigger value="hypotheses" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Hypotheses</TabsTrigger>
               <TabsTrigger value="diagram" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Flow</TabsTrigger>
-              <TabsTrigger value="questions" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Clarifications</TabsTrigger>
+              <TabsTrigger value="questions" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Questions</TabsTrigger>
+              <TabsTrigger value="audit" onClick={() => {}} className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Audit Trail</TabsTrigger>
+              <TabsTrigger value="correlations" onClick={fetchCorrelations} className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Similar Bugs</TabsTrigger>
+              <TabsTrigger value="collaborate" onClick={() => { loadAnnotations(); connectCollaboration(); }} className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+                <Users className="w-3 h-3 mr-1" />Team
+              </TabsTrigger>
             </TabsList>
-            
+
             <div className="mt-4">
               <TabsContent value="steps" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
@@ -407,7 +574,7 @@ export function AnalysisDetail() {
                   </CardContent>
                 </Card>
               </TabsContent>
-              
+
               <TabsContent value="test" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
                   <CardContent className="p-0">
@@ -417,26 +584,24 @@ export function AnalysisDetail() {
                   </CardContent>
                 </Card>
               </TabsContent>
-              
+
               <TabsContent value="hypotheses" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
                   <CardContent className="p-6">
-                    <div className="prose prose-invert max-w-none font-sans text-sm">
-                      <div className="whitespace-pre-wrap text-muted-foreground">
-                        {analysis.hypotheses || "No hypotheses generated."}
-                      </div>
+                    <div className="whitespace-pre-wrap text-muted-foreground text-sm">
+                      {analysis.hypotheses || "No hypotheses generated."}
                     </div>
                   </CardContent>
                 </Card>
               </TabsContent>
-              
+
               <TabsContent value="diagram" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
                   <CardContent className="p-6">
                     <div className="bg-muted/30 rounded border border-border/50 p-6 flex flex-col items-center justify-center min-h-[300px]">
                       <GitMerge className="w-8 h-8 text-primary/50 mb-4" />
                       <div className="font-mono text-sm whitespace-pre-wrap text-center max-w-2xl text-muted-foreground">
-                        {analysis.flowDiagram || "Flow diagram visualization not available."}
+                        {analysis.flowDiagram || "Flow diagram not available."}
                       </div>
                     </div>
                   </CardContent>
@@ -448,6 +613,188 @@ export function AnalysisDetail() {
                   <CardContent className="p-6">
                     <div className="bg-destructive/5 rounded-lg border border-destructive/20 p-6 font-mono text-sm whitespace-pre-wrap text-destructive-foreground">
                       {analysis.clarifyingQuestions || "No clarifying questions needed."}
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Feature 8: Audit Trail */}
+              <TabsContent value="audit" className="m-0">
+                <Card className="border-border/50 bg-card shadow-sm">
+                  <CardHeader className="pb-3 border-b border-border/50">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-primary" />
+                      Reproduction Audit Trail
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">Every decision the pipeline made — fully auditable</p>
+                  </CardHeader>
+                  <CardContent className="p-4">
+                    {auditTrail.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-8">No audit trail available. Run the pipeline to generate one.</p>
+                    ) : (
+                      <div className="relative pl-4">
+                        <div className="absolute left-0 top-0 bottom-0 w-px bg-border" />
+                        <div className="space-y-6">
+                          {auditTrail.map((entry, i) => (
+                            <div key={i} className="relative">
+                              <div className="absolute -left-[1.35rem] top-1 w-3 h-3 rounded-full bg-primary/30 border-2 border-primary" />
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-semibold text-sm font-mono text-primary">{entry.agent}</span>
+                                  <Badge variant="outline" className="text-xs">{entry.action.replace(/_/g, " ")}</Badge>
+                                  <span className="text-xs text-muted-foreground ml-auto">
+                                    {format(new Date(entry.timestamp), "HH:mm:ss")}
+                                  </span>
+                                </div>
+                                <p className="text-sm font-medium">{entry.decision}</p>
+                                <p className="text-xs text-muted-foreground">{entry.rationale}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Feature 2: Multi-Bug Correlation */}
+              <TabsContent value="correlations" className="m-0">
+                <Card className="border-border/50 bg-card shadow-sm">
+                  <CardHeader className="pb-3 border-b border-border/50 flex flex-row items-center justify-between">
+                    <div>
+                      <CardTitle className="text-sm font-medium flex items-center gap-2">
+                        <Network className="w-4 h-4 text-primary" />
+                        Similar Past Bugs
+                      </CardTitle>
+                      <p className="text-xs text-muted-foreground mt-0.5">Structurally similar bugs from your history</p>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={() => { setCorrelationsFetched(false); fetchCorrelations(); }} disabled={correlationsLoading}>
+                      <RefreshCw className={`w-4 h-4 ${correlationsLoading ? "animate-spin" : ""}`} />
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="p-4">
+                    {correlationsLoading ? (
+                      <div className="py-8 text-center text-muted-foreground">
+                        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                        <p className="text-sm">Searching for similar bugs...</p>
+                      </div>
+                    ) : correlations.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-8">
+                        {correlationsFetched ? "No similar bugs found in history." : "Click the tab to search for similar bugs."}
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {correlations.map((c) => (
+                          <div key={c.id} className="rounded-lg border border-border/50 bg-muted/20 p-4 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <Link href={`/analyses/${c.id}`}>
+                                <span className="font-medium text-sm hover:text-primary transition-colors cursor-pointer">{c.title}</span>
+                              </Link>
+                              <Badge className={`text-xs shrink-0 ${c.similarity >= 70 ? "bg-red-500/20 text-red-400 border-red-500/30" : c.similarity >= 50 ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-blue-500/20 text-blue-400 border-blue-500/30"}`} variant="outline">
+                                {c.similarity}% similar
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-muted-foreground">{c.rootCauseNote}</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {c.commonFactors.map((f, fi) => (
+                                <Badge key={fi} variant="secondary" className="text-xs">{f}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Feature 4: Collaboration */}
+              <TabsContent value="collaborate" className="m-0">
+                <Card className="border-border/50 bg-card shadow-sm">
+                  <CardHeader className="pb-3 border-b border-border/50">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-sm font-medium flex items-center gap-2">
+                          <Users className="w-4 h-4 text-primary" />
+                          Reproduction Session
+                        </CardTitle>
+                        <p className="text-xs text-muted-foreground mt-0.5">Annotate steps, mark verifications, ask questions</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                        {collaboratorCount} online
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-4 space-y-4">
+                    {/* Existing annotations */}
+                    {annotations.length > 0 && (
+                      <div className="space-y-3 max-h-64 overflow-y-auto">
+                        {annotations.map((a) => {
+                          const cfg = ANNOTATION_CONFIG[a.type];
+                          const Icon = cfg.icon;
+                          return (
+                            <div key={a.id} className="flex gap-3 text-sm">
+                              <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${cfg.color}`} />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-semibold text-xs">{a.authorName}</span>
+                                  <Badge variant="outline" className="text-xs">{cfg.label}</Badge>
+                                  {a.stepRef && <span className="text-xs text-muted-foreground">re: {a.stepRef}</span>}
+                                  <span className="text-xs text-muted-foreground ml-auto">{format(new Date(a.createdAt), "HH:mm")}</span>
+                                </div>
+                                <p className="text-sm text-muted-foreground mt-0.5">{a.content}</p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {annotations.length === 0 && (
+                      <div className="text-center py-6 text-muted-foreground text-sm">
+                        <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                        No annotations yet. Be the first to add one.
+                      </div>
+                    )}
+
+                    {/* Add annotation */}
+                    <div className="border-t border-border/50 pt-4 space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Your name</p>
+                          <Input value={authorName} onChange={e => setAuthorName(e.target.value)} placeholder="Anonymous" className="text-sm h-8" />
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Type</p>
+                          <Select value={annotationType} onValueChange={v => setAnnotationType(v as typeof annotationType)}>
+                            <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="note">Note</SelectItem>
+                              <SelectItem value="verified">Verified</SelectItem>
+                              <SelectItem value="failed">Failed</SelectItem>
+                              <SelectItem value="question">Question</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Step reference (optional)</p>
+                        <Input value={annotationStepRef} onChange={e => setAnnotationStepRef(e.target.value)} placeholder="e.g. Step 3" className="text-sm h-8" />
+                      </div>
+                      <div>
+                        <Textarea
+                          value={annotationContent}
+                          onChange={e => setAnnotationContent(e.target.value)}
+                          placeholder="Add your annotation..."
+                          rows={3}
+                          className="text-sm resize-none"
+                        />
+                      </div>
+                      <Button onClick={submitAnnotation} disabled={submittingAnnotation || !annotationContent.trim()} size="sm" className="w-full gap-2">
+                        <Send className="w-3.5 h-3.5" />
+                        {submittingAnnotation ? "Posting..." : "Post Annotation"}
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>

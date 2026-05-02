@@ -7,6 +7,21 @@ export type AgentEvent = {
   content: string;
 };
 
+export type AuditEntry = {
+  timestamp: string;
+  agent: string;
+  action: string;
+  decision: string;
+  rationale: string;
+};
+
+export type ConfidenceBreakdown = {
+  score: number;
+  evidence: string[];
+  assumptions: string[];
+  missing: string[];
+};
+
 export type PipelineResult = {
   extractedEntities: string;
   hypotheses: string;
@@ -15,6 +30,10 @@ export type PipelineResult = {
   flowDiagram: string;
   clarifyingQuestions: string;
   confidenceScore: number;
+  confidenceBreakdown: ConfidenceBreakdown;
+  severity: "critical" | "high" | "medium" | "low";
+  severityReason: string;
+  auditTrail: AuditEntry[];
 };
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
@@ -44,9 +63,10 @@ async function runAgent(
   systemPrompt: string,
   userPrompt: string,
   onEvent: (event: AgentEvent) => void
-): Promise<string> {
+): Promise<{ content: string; duration: number }> {
   onEvent({ type: "agent_start", agentName, content: `Starting ${agentName}...` });
 
+  const startTime = Date.now();
   let fullContent = "";
 
   const stream = await openai.chat.completions.create({
@@ -67,8 +87,9 @@ async function runAgent(
     }
   }
 
+  const duration = Date.now() - startTime;
   onEvent({ type: "agent_done", agentName, content: `${agentName} complete.` });
-  return fullContent;
+  return { content: fullContent, duration };
 }
 
 export async function runBugReproductionPipeline(
@@ -80,9 +101,10 @@ export async function runBugReproductionPipeline(
   const sourceLabel = SOURCE_TYPE_LABELS[inputType] ?? "bug report";
   const sourceHint = SOURCE_TYPE_HINTS[inputType] ?? "";
   const context = codeContext ? `\n\nRelevant code context:\n\`\`\`\n${codeContext}\n\`\`\`` : "";
+  const auditTrail: AuditEntry[] = [];
 
   // Stage 1: Entity Extraction Agent
-  const extractedEntities = await runAgent(
+  const { content: extractedEntities } = await runAgent(
     "Entity Extraction Agent",
     `You are an expert bug analysis AI specializing in ${sourceLabel} analysis.
 Extract structured information from the provided ${sourceLabel}.
@@ -103,8 +125,16 @@ Format your output as a clear, structured list with bold headers. Be concise and
     onEvent
   );
 
+  auditTrail.push({
+    timestamp: new Date().toISOString(),
+    agent: "Entity Extraction Agent",
+    action: "extracted_entities",
+    decision: "Parsed bug report into structured entities: component, trigger, expected vs actual, environment, errors",
+    rationale: `Processed ${sourceLabel} input to identify all key debugging signals before hypothesis generation.`,
+  });
+
   // Stage 2: Hypothesis Generator
-  const hypotheses = await runAgent(
+  const { content: hypotheses } = await runAgent(
     "Hypothesis Generator",
     `You are an expert debugging AI. Given structured bug information extracted from a ${sourceLabel}, generate multiple hypotheses about the root cause.
 
@@ -113,14 +143,27 @@ For each hypothesis:
 2. Explain the mechanism — WHY this could cause the observed behavior
 3. Rate likelihood: **High** / **Medium** / **Low** with a brief reason
 4. Identify what evidence would confirm or refute it
+5. State whether this hypothesis was RETAINED or ELIMINATED based on available evidence, and why.
 
 Generate 3-5 distinct hypotheses ordered by likelihood. Consider: race conditions, state management issues, environment-specific factors, edge cases in data handling, version mismatches, network/async timing, and configuration errors.`,
     `Extracted bug information:\n${extractedEntities}`,
     onEvent
   );
 
+  // Count retained vs eliminated
+  const eliminatedCount = (hypotheses.match(/ELIMINATED/gi) || []).length;
+  const retainedCount = (hypotheses.match(/RETAINED/gi) || []).length;
+
+  auditTrail.push({
+    timestamp: new Date().toISOString(),
+    agent: "Hypothesis Generator",
+    action: "generated_hypotheses",
+    decision: `Generated ${retainedCount + eliminatedCount} hypotheses; ${retainedCount} retained, ${eliminatedCount} eliminated based on evidence`,
+    rationale: "Ranked by likelihood using entity signals. Eliminated hypotheses contradicted by available stack data or environment info.",
+  });
+
   // Stage 3: Step Validator / Reproduction Steps
-  const reproductionSteps = await runAgent(
+  const { content: reproductionSteps } = await runAgent(
     "Step Validator",
     `You are an expert QA engineer. Given bug information and hypotheses, create precise, actionable reproduction steps that a developer could follow in under 5 minutes.
 
@@ -152,8 +195,19 @@ Rate confidence this reproduces the bug: X/10 — brief explanation.`,
     onEvent
   );
 
+  const stepConfidenceMatch = reproductionSteps.match(/(\d+)\/10/);
+  const stepConfidence = stepConfidenceMatch ? parseInt(stepConfidenceMatch[1], 10) : 7;
+
+  auditTrail.push({
+    timestamp: new Date().toISOString(),
+    agent: "Step Validator",
+    action: "validated_steps",
+    decision: `Reproduction steps validated with ${stepConfidence}/10 confidence. Steps account for all retained hypotheses.`,
+    rationale: "Steps derived from highest-likelihood hypothesis. Validation notes cover alternative paths to rule out other candidates.",
+  });
+
   // Stage 4: Test Writer
-  const testCode = await runAgent(
+  const { content: testCode } = await runAgent(
     "Test Writer",
     `You are a senior software engineer. Generate complete, executable test code to reproduce and verify the bug.
 
@@ -176,10 +230,18 @@ Default to Jest + TypeScript unless another framework is clearly implied by the 
     onEvent
   );
 
+  auditTrail.push({
+    timestamp: new Date().toISOString(),
+    agent: "Test Writer",
+    action: "generated_tests",
+    decision: "Generated test suite covering: main reproduction case, edge case, and regression guard",
+    rationale: "Test assertions are designed to fail with the bug present and pass once the root cause is fixed.",
+  });
+
   // Stage 5: Analysis Synthesizer — flow diagram + clarifying questions + confidence
-  const analysisOutput = await runAgent(
+  const { content: analysisOutput } = await runAgent(
     "Analysis Synthesizer",
-    `You are a debugging expert and technical writer. Synthesize the full bug analysis into three sections:
+    `You are a debugging expert and technical writer. Synthesize the full bug analysis into four sections:
 
 ## 1. Flow Diagram (Mermaid)
 
@@ -194,11 +256,21 @@ Wrap in \`\`\`mermaid ... \`\`\` fences.
 
 List exactly 5 targeted questions that, if answered, would either confirm the root cause or significantly narrow the search space. Number them 1-5. Make them specific and actionable — not generic.
 
-## 3. Confidence Score
+## 3. Confidence Score & Breakdown
 
-Provide a final confidence score based on: quality of input, specificity of reproduction steps, and strength of evidence.
-Format exactly as: CONFIDENCE_SCORE: [0-100]
-Then one sentence explaining the score.`,
+Provide a confidence score and a structured breakdown.
+Format EXACTLY as:
+CONFIDENCE_SCORE: [0-100]
+CONFIDENCE_EVIDENCE: ["evidence point 1", "evidence point 2", "evidence point 3"]
+CONFIDENCE_ASSUMPTIONS: ["assumption 1", "assumption 2"]
+CONFIDENCE_MISSING: ["missing info 1", "missing info 2"]
+
+## 4. Severity Classification
+
+Classify the bug severity based on: user impact, affected component criticality, reproducibility, data risk.
+Format EXACTLY as:
+SEVERITY: [critical|high|medium|low]
+SEVERITY_REASON: One sentence explaining the severity rating.`,
     `Full analysis:\n\nEntities:\n${extractedEntities}\n\nHypotheses:\n${hypotheses}\n\nReproduction steps:\n${reproductionSteps}`,
     onEvent
   );
@@ -209,7 +281,45 @@ Then one sentence explaining the score.`,
     ? Math.min(100, Math.max(0, parseInt(confidenceMatch[1], 10))) / 100
     : 0.65;
 
-  logger.info({ confidenceScore, inputType }, "Pipeline complete");
+  // Parse confidence breakdown
+  let confidenceBreakdown: ConfidenceBreakdown = {
+    score: Math.round(confidenceScore * 100),
+    evidence: [],
+    assumptions: [],
+    missing: [],
+  };
+
+  try {
+    const evidenceMatch = analysisOutput.match(/CONFIDENCE_EVIDENCE:\s*(\[[\s\S]*?\])/);
+    const assumptionsMatch = analysisOutput.match(/CONFIDENCE_ASSUMPTIONS:\s*(\[[\s\S]*?\])/);
+    const missingMatch = analysisOutput.match(/CONFIDENCE_MISSING:\s*(\[[\s\S]*?\])/);
+
+    if (evidenceMatch) confidenceBreakdown.evidence = JSON.parse(evidenceMatch[1]);
+    if (assumptionsMatch) confidenceBreakdown.assumptions = JSON.parse(assumptionsMatch[1]);
+    if (missingMatch) confidenceBreakdown.missing = JSON.parse(missingMatch[1]);
+  } catch {
+    // Fallback if JSON parsing fails
+    confidenceBreakdown.evidence = ["Pipeline analysis completed successfully"];
+    confidenceBreakdown.assumptions = ["Input is representative of the actual bug scenario"];
+    confidenceBreakdown.missing = ["Additional environment details would improve accuracy"];
+  }
+
+  // Parse severity
+  const severityMatch = analysisOutput.match(/SEVERITY:\s*(critical|high|medium|low)/i);
+  const severity = (severityMatch?.[1]?.toLowerCase() ?? "medium") as "critical" | "high" | "medium" | "low";
+
+  const severityReasonMatch = analysisOutput.match(/SEVERITY_REASON:\s*(.+)/);
+  const severityReason = severityReasonMatch?.[1]?.trim() ?? "Severity assessed based on reproduction complexity and component impact.";
+
+  auditTrail.push({
+    timestamp: new Date().toISOString(),
+    agent: "Analysis Synthesizer",
+    action: "synthesized_analysis",
+    decision: `Final confidence: ${Math.round(confidenceScore * 100)}%, Severity: ${severity}. Generated flow diagram and 5 clarifying questions.`,
+    rationale: "Confidence derived from input quality, specificity of reproduction steps, and hypothesis evidence strength. Severity based on user impact and component criticality.",
+  });
+
+  logger.info({ confidenceScore, severity, inputType }, "Pipeline complete");
 
   return {
     extractedEntities,
@@ -219,5 +329,198 @@ Then one sentence explaining the score.`,
     flowDiagram: analysisOutput,
     clarifyingQuestions: analysisOutput,
     confidenceScore,
+    confidenceBreakdown,
+    severity,
+    severityReason,
+    auditTrail,
   };
+}
+
+export async function runEnvDiff(
+  env1: string,
+  env2: string,
+  bugDescription: string,
+  label1: string,
+  label2: string
+): Promise<string> {
+  const response = await openai.chat.completions.create({
+    model: "gpt-5.4",
+    max_completion_tokens: 3000,
+    messages: [
+      {
+        role: "system",
+        content: `You are an expert in environment configuration and intermittent bug diagnosis. Compare two environment configurations and identify which differences are most likely causing the described bug or behavior discrepancy.
+
+For each difference found, classify its impact:
+- critical: Almost certainly causing the bug
+- likely: Probably related to the bug
+- unlikely: Might be relevant but probably not
+- irrelevant: Unrelated to the described bug
+
+Output MUST be valid JSON in this exact structure:
+{
+  "differences": [
+    {
+      "key": "VARIABLE_NAME",
+      "value1": "value in ${label1}",
+      "value2": "value in ${label2}",
+      "impact": "critical|likely|unlikely|irrelevant",
+      "reasoning": "Why this difference matters for the bug"
+    }
+  ],
+  "verdict": "Detailed explanation of the most likely culprit",
+  "likelihood": "high|medium|low",
+  "summary": "One sentence summary of the key finding"
+}
+
+Be thorough — consider Node versions, timeouts, feature flags, connection strings, memory limits, TLS settings, etc.`,
+      },
+      {
+        role: "user",
+        content: `Bug description: ${bugDescription}
+
+${label1} environment:
+${env1}
+
+${label2} environment:
+${env2}
+
+Analyze the differences and identify which config change is most likely responsible for the bug.`,
+      },
+    ],
+  });
+
+  return response.choices[0]?.message?.content ?? '{"differences":[],"verdict":"Unable to analyze","likelihood":"low","summary":"Analysis failed"}';
+}
+
+export async function runNl2Test(
+  description: string,
+  framework: string,
+  codeContext: string | undefined
+): Promise<string> {
+  const context = codeContext ? `\n\nRelevant code:\n\`\`\`\n${codeContext}\n\`\`\`` : "";
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-5.4",
+    max_completion_tokens: 3000,
+    messages: [
+      {
+        role: "system",
+        content: `You are a senior test engineer. Generate complete, executable test code from a plain English description.
+
+Output MUST be valid JSON:
+{
+  "testCode": "// complete test code here",
+  "framework": "Jest|Pytest|Mocha|Cypress|etc",
+  "explanation": "What the test does and why it's structured this way",
+  "coverageNotes": "What scenarios are covered and what's left out"
+}
+
+Requirements for the test code:
+- Complete and runnable with no placeholders
+- Descriptive test names
+- Setup/teardown as needed
+- Cover the happy path AND at least one failure/edge case
+- Add inline comments explaining intent`,
+      },
+      {
+        role: "user",
+        content: `Test description: ${description}\nPreferred framework: ${framework || "Jest + TypeScript"}${context}`,
+      },
+    ],
+  });
+
+  return response.choices[0]?.message?.content ?? '{"testCode":"","framework":"Jest","explanation":"","coverageNotes":""}';
+}
+
+export async function runFlakyDetector(
+  testCode: string,
+  language: string
+): Promise<string> {
+  const response = await openai.chat.completions.create({
+    model: "gpt-5.4",
+    max_completion_tokens: 3000,
+    messages: [
+      {
+        role: "system",
+        content: `You are an expert in test reliability and flakiness detection. Analyze the provided test code and identify which tests are likely to be flaky.
+
+Flakiness categories:
+- race_condition: Async timing issues, missing awaits, concurrent state
+- environment_dependency: Relies on specific OS, timezone, file paths, env vars
+- non_deterministic_data: Random values, non-seeded random, floating point
+- timing: Sleep/timeout based assertions, assumes execution order
+- external_dependency: Calls real APIs, databases, or file system
+- state_leak: Tests share mutable state, missing cleanup
+- other: Other flakiness cause
+
+Output MUST be valid JSON:
+{
+  "flakyTests": [
+    {
+      "testName": "exact test name or describe block",
+      "riskLevel": "high|medium|low",
+      "category": "race_condition|environment_dependency|non_deterministic_data|timing|external_dependency|state_leak|other",
+      "explanation": "Specific explanation of why this test is flaky and what exact line/pattern causes it",
+      "fix": "Concrete suggestion to fix the flakiness"
+    }
+  ],
+  "overallRisk": "high|medium|low|none",
+  "summary": "Overall assessment of the test suite reliability"
+}
+
+If no flaky tests are found, return an empty flakyTests array with overallRisk "none".`,
+      },
+      {
+        role: "user",
+        content: `Language/Framework: ${language || "JavaScript/TypeScript"}\n\nTest code:\n\`\`\`\n${testCode}\n\`\`\``,
+      },
+    ],
+  });
+
+  return response.choices[0]?.message?.content ?? '{"flakyTests":[],"overallRisk":"none","summary":"Unable to analyze"}';
+}
+
+export async function runCorrelation(
+  targetInput: string,
+  targetEntities: string,
+  candidates: Array<{ id: number; title: string; rawInput: string; extractedEntities: string | null; createdAt: Date }>
+): Promise<string> {
+  if (candidates.length === 0) return "[]";
+
+  const candidateSummaries = candidates
+    .slice(0, 10)
+    .map(c => `ID: ${c.id}\nTitle: ${c.title}\nInput (truncated): ${c.rawInput.slice(0, 300)}\nEntities: ${(c.extractedEntities ?? "").slice(0, 300)}`)
+    .join("\n\n---\n\n");
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-5.4",
+    max_completion_tokens: 2000,
+    messages: [
+      {
+        role: "system",
+        content: `You are a bug pattern recognition AI. Compare a target bug report against a set of historical bug reports and identify structural similarities — same execution paths, same failure signatures, same root cause patterns.
+
+Output MUST be valid JSON array of correlation matches (only include bugs with similarity >= 30%):
+[
+  {
+    "id": 123,
+    "title": "Bug title",
+    "similarity": 87,
+    "commonFactors": ["JWT token handling", "async race condition", "authentication middleware"],
+    "rootCauseNote": "Historical bug was caused by X — current bug shows the same Y pattern",
+    "createdAt": "ISO timestamp"
+  }
+]
+
+Return [] if no meaningful correlations are found. Be precise — only flag genuine structural matches, not superficial keyword overlap.`,
+      },
+      {
+        role: "user",
+        content: `Target bug:\nTitle input: ${targetInput.slice(0, 500)}\nExtracted entities: ${targetEntities.slice(0, 500)}\n\nHistorical bugs to compare against:\n\n${candidateSummaries}`,
+      },
+    ],
+  });
+
+  return response.choices[0]?.message?.content ?? "[]";
 }

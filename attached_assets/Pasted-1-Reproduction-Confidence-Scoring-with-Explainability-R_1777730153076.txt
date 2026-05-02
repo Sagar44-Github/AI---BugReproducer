@@ -1,0 +1,23 @@
+1. Reproduction Confidence Scoring with Explainability
+Right now confidence scores are mentioned but vague. Make it a full feature — each reproduction path gets a score (0–100%) with a breakdown explaining why that score was given. What evidence supports it, what assumptions were made, what's missing. This makes the output auditable, not just a black box number.
+
+2. Multi-Bug Correlation Engine
+When you input a new bug, the system checks it against a database of previously processed bugs. If a similar pattern was seen before — same execution path, same failure signature — it surfaces that history. "This bug shares 87% structural similarity with issue #4421 from 3 months ago. That one was caused by a JWT expiry race condition." That's genuinely powerful and no existing tool does it.
+
+3. Environment Diff Detector
+A huge reason bugs can't be reproduced is environment mismatch — the bug happens on staging but not local, or on Chrome but not Firefox. Add a feature where users input two environment configs and the system identifies what differs and which difference is most likely responsible for the inconsistency. This directly attacks the "intermittent bug" problem you cited in your problem statement.
+
+4. Reproduction Session Collaboration
+Multiple developers can join the same reproduction session in real time. They see the same pipeline running, can annotate hypotheses, mark steps as verified or failed, and add context live. Think of it as a shared debugging room powered by the agent pipeline. This turns REPRO from a solo tool into a team infrastructure product.
+
+5. Natural Language to Test Case (NL2Test)
+User describes what they want to test in plain English — "test what happens when a logged-in user tries to access an admin route" — and REPRO generates the full test case. This is separate from the reproduction flow. It's a standalone feature that makes the test writer agent accessible even without a bug report as input.
+
+6. Flaky Test Detector
+Given a test suite, REPRO identifies which tests are flaky — passing sometimes, failing sometimes — and runs them through the hypothesis pipeline to explain why they're flaky. Race condition? Environment dependency? Non-deterministic data? This is a real production pain point that connects directly to your core system.
+
+7. Bug Severity Classifier
+Automatically classifies incoming bugs by severity — critical, high, medium, low — based on the reproduction path, affected components, frequency, and user impact signals. Outputs a priority score with reasoning. Teams spend real time triaging bugs manually. This automates that step.
+
+8. Reproduction Audit Trail
+Every decision the pipeline makes is logged — which hypotheses were generated, which were eliminated and why, which steps were validated, what assumptions were made. This creates a full audit trail that developers can review, override, or export. Adds accountability and makes the system trustworthy in production environments.

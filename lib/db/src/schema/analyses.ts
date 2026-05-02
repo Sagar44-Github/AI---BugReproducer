@@ -4,6 +4,7 @@ import {
   serial,
   timestamp,
   real,
+  integer,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -24,6 +25,13 @@ export const analysesTable = pgTable("analyses", {
     .notNull()
     .default("pending"),
   confidenceScore: real("confidence_score"),
+  confidenceBreakdown: text("confidence_breakdown"),
+  severity: text("severity", {
+    enum: ["critical", "high", "medium", "low"],
+  }),
+  severityReason: text("severity_reason"),
+  auditTrail: text("audit_trail"),
+  correlations: text("correlations"),
   extractedEntities: text("extracted_entities"),
   hypotheses: text("hypotheses"),
   reproductionSteps: text("reproduction_steps"),
@@ -34,11 +42,30 @@ export const analysesTable = pgTable("analyses", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const collaborationAnnotationsTable = pgTable("collaboration_annotations", {
+  id: serial("id").primaryKey(),
+  analysisId: integer("analysis_id").notNull(),
+  authorName: text("author_name").notNull(),
+  type: text("type", {
+    enum: ["note", "verified", "failed", "question"],
+  }).notNull(),
+  stepRef: text("step_ref"),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const insertAnalysisSchema = createInsertSchema(analysesTable).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
 });
 
+export const insertAnnotationSchema = createInsertSchema(collaborationAnnotationsTable).omit({
+  id: true,
+  createdAt: true,
+});
+
 export type InsertAnalysis = z.infer<typeof insertAnalysisSchema>;
 export type Analysis = typeof analysesTable.$inferSelect;
+export type InsertAnnotation = z.infer<typeof insertAnnotationSchema>;
+export type CollaborationAnnotation = typeof collaborationAnnotationsTable.$inferSelect;

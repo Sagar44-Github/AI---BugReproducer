@@ -42,6 +42,16 @@ export const ListAnalysesResponseItem = zod.object({
   codeContext: zod.string().nullish(),
   status: zod.enum(["pending", "running", "completed", "failed"]),
   confidenceScore: zod.number().nullish(),
+  severity: zod
+    .union([
+      zod.literal("critical"),
+      zod.literal("high"),
+      zod.literal("medium"),
+      zod.literal("low"),
+      zod.literal(null),
+    ])
+    .nullish(),
+  severityReason: zod.string().nullish(),
   tags: zod.string().nullish(),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
@@ -94,6 +104,19 @@ export const GetAnalysisResponse = zod.object({
   codeContext: zod.string().nullish(),
   status: zod.enum(["pending", "running", "completed", "failed"]),
   confidenceScore: zod.number().nullish(),
+  confidenceBreakdown: zod.string().nullish(),
+  severity: zod
+    .union([
+      zod.literal("critical"),
+      zod.literal("high"),
+      zod.literal("medium"),
+      zod.literal("low"),
+      zod.literal(null),
+    ])
+    .nullish(),
+  severityReason: zod.string().nullish(),
+  auditTrail: zod.string().nullish(),
+  correlations: zod.string().nullish(),
   tags: zod.string().nullish(),
   extractedEntities: zod.string().nullish(),
   hypotheses: zod.string().nullish(),
@@ -136,6 +159,19 @@ export const UpdateAnalysisResponse = zod.object({
   codeContext: zod.string().nullish(),
   status: zod.enum(["pending", "running", "completed", "failed"]),
   confidenceScore: zod.number().nullish(),
+  confidenceBreakdown: zod.string().nullish(),
+  severity: zod
+    .union([
+      zod.literal("critical"),
+      zod.literal("high"),
+      zod.literal("medium"),
+      zod.literal("low"),
+      zod.literal(null),
+    ])
+    .nullish(),
+  severityReason: zod.string().nullish(),
+  auditTrail: zod.string().nullish(),
+  correlations: zod.string().nullish(),
   tags: zod.string().nullish(),
   extractedEntities: zod.string().nullish(),
   hypotheses: zod.string().nullish(),
@@ -178,6 +214,55 @@ export const ExportAnalysisResponse = zod.object({
 });
 
 /**
+ * @summary Find similar bugs from past analyses
+ */
+export const GetCorrelationsParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetCorrelationsResponseItem = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  similarity: zod.number().describe("Similarity percentage 0-100"),
+  commonFactors: zod.array(zod.string()),
+  rootCauseNote: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const GetCorrelationsResponse = zod.array(GetCorrelationsResponseItem);
+
+/**
+ * @summary List collaboration annotations for an analysis
+ */
+export const ListAnnotationsParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ListAnnotationsResponseItem = zod.object({
+  id: zod.number(),
+  analysisId: zod.number(),
+  authorName: zod.string(),
+  type: zod.enum(["note", "verified", "failed", "question"]),
+  stepRef: zod.string().nullish(),
+  content: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListAnnotationsResponse = zod.array(ListAnnotationsResponseItem);
+
+/**
+ * @summary Add a collaboration annotation
+ */
+export const CreateAnnotationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const CreateAnnotationBody = zod.object({
+  authorName: zod.string(),
+  type: zod.enum(["note", "verified", "failed", "question"]),
+  stepRef: zod.string().optional(),
+  content: zod.string(),
+});
+
+/**
  * @summary Get summary stats across all analyses
  */
 export const GetAnalysisStatsResponse = zod.object({
@@ -211,4 +296,102 @@ export const FetchGithubIssueResponse = zod.object({
   url: zod.string(),
   number: zod.number(),
   author: zod.string(),
+});
+
+/**
+ * @summary Compare two environment configs and identify bug-causing differences
+ */
+export const EnvDiffBody = zod.object({
+  env1: zod
+    .string()
+    .describe("First environment config (key=value lines or JSON)"),
+  env2: zod
+    .string()
+    .describe("Second environment config (key=value lines or JSON)"),
+  bugDescription: zod
+    .string()
+    .describe("Description of the bug or intermittent behavior"),
+  label1: zod
+    .string()
+    .optional()
+    .describe('Label for first environment (e.g. \"Local\", \"Staging\")'),
+  label2: zod
+    .string()
+    .optional()
+    .describe('Label for second environment (e.g. \"Production\", \"CI\")'),
+});
+
+export const EnvDiffResponse = zod.object({
+  differences: zod.array(
+    zod.object({
+      key: zod.string(),
+      value1: zod.string().nullable(),
+      value2: zod.string().nullable(),
+      impact: zod.enum(["critical", "likely", "unlikely", "irrelevant"]),
+      reasoning: zod.string(),
+    }),
+  ),
+  verdict: zod.string().describe("AI verdict on the most likely culprit"),
+  likelihood: zod.enum(["high", "medium", "low"]),
+  summary: zod.string(),
+});
+
+/**
+ * @summary Generate a test case from a natural language description
+ */
+export const Nl2testBody = zod.object({
+  description: zod
+    .string()
+    .describe("Natural language description of what to test"),
+  framework: zod
+    .string()
+    .optional()
+    .describe("Test framework hint (e.g. Jest, Pytest, Mocha, Cypress)"),
+  codeContext: zod
+    .string()
+    .optional()
+    .describe("Optional relevant code context"),
+});
+
+export const Nl2testResponse = zod.object({
+  testCode: zod.string(),
+  framework: zod.string(),
+  explanation: zod.string(),
+  coverageNotes: zod.string(),
+});
+
+/**
+ * @summary Detect flaky tests and explain why they are flaky
+ */
+export const FlakyDetectorBody = zod.object({
+  testCode: zod
+    .string()
+    .describe("The test suite or individual test code to analyze"),
+  language: zod.string().optional().describe("Language\/framework hint"),
+  runCount: zod
+    .number()
+    .optional()
+    .describe("Optional number of times the test has been run"),
+});
+
+export const FlakyDetectorResponse = zod.object({
+  flakyTests: zod.array(
+    zod.object({
+      testName: zod.string(),
+      riskLevel: zod.enum(["high", "medium", "low"]),
+      category: zod.enum([
+        "race_condition",
+        "environment_dependency",
+        "non_deterministic_data",
+        "timing",
+        "external_dependency",
+        "state_leak",
+        "other",
+      ]),
+      explanation: zod.string(),
+      fix: zod.string(),
+    }),
+  ),
+  overallRisk: zod.enum(["high", "medium", "low", "none"]),
+  summary: zod.string(),
 });

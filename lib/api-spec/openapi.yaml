@@ -14,6 +14,8 @@ tags:
     description: Bug report analysis pipeline operations
   - name: github
     description: GitHub issue ingestion
+  - name: tools
+    description: Standalone AI tools
 paths:
   /healthz:
     get:
@@ -203,6 +205,83 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  /analyses/{id}/correlations:
+    get:
+      operationId: getCorrelations
+      tags: [analyses]
+      summary: Find similar bugs from past analyses
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of correlated analyses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CorrelationMatch"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /analyses/{id}/annotations:
+    get:
+      operationId: listAnnotations
+      tags: [analyses]
+      summary: List collaboration annotations for an analysis
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of annotations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CollaborationAnnotation"
+    post:
+      operationId: createAnnotation
+      tags: [analyses]
+      summary: Add a collaboration annotation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAnnotationBody"
+      responses:
+        "201":
+          description: Created annotation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollaborationAnnotation"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
   /analyses/stats/summary:
     get:
       operationId: getAnalysisStats
@@ -247,6 +326,81 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  /tools/env-diff:
+    post:
+      operationId: envDiff
+      tags: [tools]
+      summary: Compare two environment configs and identify bug-causing differences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvDiffBody"
+      responses:
+        "200":
+          description: Environment diff result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvDiffResult"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /tools/nl2test:
+    post:
+      operationId: nl2test
+      tags: [tools]
+      summary: Generate a test case from a natural language description
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Nl2TestBody"
+      responses:
+        "200":
+          description: Generated test code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Nl2TestResult"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /tools/flaky-detector:
+    post:
+      operationId: flakyDetector
+      tags: [tools]
+      summary: Detect flaky tests and explain why they are flaky
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FlakyDetectorBody"
+      responses:
+        "200":
+          description: Flakiness analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlakyDetectorResult"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
 components:
   schemas:
     HealthStatus:
@@ -278,6 +432,11 @@ components:
           enum: [pending, running, completed, failed]
         confidenceScore:
           type: ["number", "null"]
+        severity:
+          type: ["string", "null"]
+          enum: ["critical", "high", "medium", "low", null]
+        severityReason:
+          type: ["string", "null"]
         tags:
           type: ["string", "null"]
         createdAt:
@@ -316,6 +475,17 @@ components:
           enum: [pending, running, completed, failed]
         confidenceScore:
           type: ["number", "null"]
+        confidenceBreakdown:
+          type: ["string", "null"]
+        severity:
+          type: ["string", "null"]
+          enum: ["critical", "high", "medium", "low", null]
+        severityReason:
+          type: ["string", "null"]
+        auditTrail:
+          type: ["string", "null"]
+        correlations:
+          type: ["string", "null"]
         tags:
           type: ["string", "null"]
         extractedEntities:
@@ -425,6 +595,228 @@ components:
       required:
         - markdown
         - title
+
+    CorrelationMatch:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        similarity:
+          type: integer
+          description: Similarity percentage 0-100
+        commonFactors:
+          type: array
+          items:
+            type: string
+        rootCauseNote:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - similarity
+        - commonFactors
+        - rootCauseNote
+        - createdAt
+
+    CollaborationAnnotation:
+      type: object
+      properties:
+        id:
+          type: integer
+        analysisId:
+          type: integer
+        authorName:
+          type: string
+        type:
+          type: string
+          enum: [note, verified, failed, question]
+        stepRef:
+          type: ["string", "null"]
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - analysisId
+        - authorName
+        - type
+        - content
+        - createdAt
+
+    CreateAnnotationBody:
+      type: object
+      properties:
+        authorName:
+          type: string
+        type:
+          type: string
+          enum: [note, verified, failed, question]
+        stepRef:
+          type: string
+        content:
+          type: string
+      required:
+        - authorName
+        - type
+        - content
+
+    EnvDiffBody:
+      type: object
+      properties:
+        env1:
+          type: string
+          description: First environment config (key=value lines or JSON)
+        env2:
+          type: string
+          description: Second environment config (key=value lines or JSON)
+        bugDescription:
+          type: string
+          description: Description of the bug or intermittent behavior
+        label1:
+          type: string
+          description: Label for first environment (e.g. "Local", "Staging")
+        label2:
+          type: string
+          description: Label for second environment (e.g. "Production", "CI")
+      required:
+        - env1
+        - env2
+        - bugDescription
+
+    EnvDiffResult:
+      type: object
+      properties:
+        differences:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnvDifference"
+        verdict:
+          type: string
+          description: AI verdict on the most likely culprit
+        likelihood:
+          type: string
+          enum: [high, medium, low]
+        summary:
+          type: string
+      required:
+        - differences
+        - verdict
+        - likelihood
+        - summary
+
+    EnvDifference:
+      type: object
+      properties:
+        key:
+          type: string
+        value1:
+          type: ["string", "null"]
+        value2:
+          type: ["string", "null"]
+        impact:
+          type: string
+          enum: [critical, likely, unlikely, irrelevant]
+        reasoning:
+          type: string
+      required:
+        - key
+        - value1
+        - value2
+        - impact
+        - reasoning
+
+    Nl2TestBody:
+      type: object
+      properties:
+        description:
+          type: string
+          description: Natural language description of what to test
+        framework:
+          type: string
+          description: Test framework hint (e.g. Jest, Pytest, Mocha, Cypress)
+        codeContext:
+          type: string
+          description: Optional relevant code context
+      required:
+        - description
+
+    Nl2TestResult:
+      type: object
+      properties:
+        testCode:
+          type: string
+        framework:
+          type: string
+        explanation:
+          type: string
+        coverageNotes:
+          type: string
+      required:
+        - testCode
+        - framework
+        - explanation
+        - coverageNotes
+
+    FlakyDetectorBody:
+      type: object
+      properties:
+        testCode:
+          type: string
+          description: The test suite or individual test code to analyze
+        language:
+          type: string
+          description: Language/framework hint
+        runCount:
+          type: integer
+          description: Optional number of times the test has been run
+      required:
+        - testCode
+
+    FlakyDetectorResult:
+      type: object
+      properties:
+        flakyTests:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlakyTest"
+        overallRisk:
+          type: string
+          enum: [high, medium, low, none]
+        summary:
+          type: string
+      required:
+        - flakyTests
+        - overallRisk
+        - summary
+
+    FlakyTest:
+      type: object
+      properties:
+        testName:
+          type: string
+        riskLevel:
+          type: string
+          enum: [high, medium, low]
+        category:
+          type: string
+          enum: [race_condition, environment_dependency, non_deterministic_data, timing, external_dependency, state_leak, other]
+        explanation:
+          type: string
+        fix:
+          type: string
+      required:
+        - testName
+        - riskLevel
+        - category
+        - explanation
+        - fix
 
     FetchGithubIssueBody:
       type: object
