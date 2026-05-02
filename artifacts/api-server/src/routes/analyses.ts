@@ -509,10 +509,20 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
   // defensible answer to "what makes you say this is similar to a prior bug?"
   function extractKeywords(text: string): Set<string> {
     const STOP = new Set([
+      // Generic connectives and pronouns
       "this","that","with","from","have","been","when","where","what","which",
       "their","there","then","than","will","would","could","should","does",
-      "error","issue","problem","null","undefined","true","false","type",
-      "object","function","return","string","number","boolean","array",
+      // Generic tech noise
+      "null","undefined","true","false","type","object","function",
+      "return","string","number","boolean","array","value","values",
+      // Common bug-report surface words that carry no domain signal
+      "error","issue","issues","problem","problems","bug","bugs","getting",
+      "user","users","button","buttons","click","clicks","press","pressing",
+      "submit","submits","message","messages","show","shows","showing",
+      "open","opens","close","closes","page","pages","form","forms",
+      "field","fields","input","inputs","alert","alerts","modal","popup",
+      "works","working","failed","fails","wrong","right","correct",
+      "appears","happen","happens","occurs","cannot","able","unable",
     ]);
     return new Set(
       text.toLowerCase()
@@ -550,7 +560,8 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
 
   let hasSimilarBugs = false;
   for (const prior of priorAnalyses) {
-    const priorText = [prior.extractedEntities ?? "", prior.tags ?? ""].join(" ");
+    if (!prior.extractedEntities) continue; // skip early test runs with no entity data
+    const priorText = [prior.extractedEntities, prior.tags ?? ""].join(" ");
     const priorKeywords = extractKeywords(priorText);
     if (keywordOverlap(currentKeywords, priorKeywords) >= 2) {
       hasSimilarBugs = true;
@@ -575,6 +586,7 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
         hypotheses: result.hypotheses,
         reproductionSteps: result.reproductionSteps,
         testCode: result.testCode,
+        testSyntaxStatus: result.testSyntaxStatus,
         flowDiagram: result.flowDiagram,
         clarifyingQuestions: result.clarifyingQuestions,
         confidenceScore: result.confidenceScore,

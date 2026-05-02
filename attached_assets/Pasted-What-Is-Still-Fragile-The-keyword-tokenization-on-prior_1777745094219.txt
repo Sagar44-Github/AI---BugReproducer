@@ -1,0 +1,26 @@
+What Is Still Fragile
+The keyword tokenization on prior analyses fetches up to 30 records and tokenizes them all in the route handler. This runs synchronously before the pipeline starts. At 30 records with JSON parsing and tokenization on each, this is fast now — but if the database grows to 500+ analyses, this pre-check could add noticeable latency before the pipeline even starts. Not a problem for the hackathon, but know the architectural debt exists.
+The 5,000 char threshold for chunking triggers trimming, but the trim is per-comment at 400 chars. If the issue body itself is 8,000 characters — a long technical description with code blocks — the body is passed through untrimmed while comments get cut. The total could still exceed 14,000 chars from the body alone. Verify that the 14,000 char hard cap applies to the entire assembled string including the body, not just the comments section.
+The destructive toast for GitHub truncation — make sure this toast doesn't fire during your demo if you're using a clean, short issue. A destructive toast appearing unexpectedly during a live demo looks like an error even if it's informational. Test your chosen demo GitHub URL and confirm the toast does not appear for it.
+The keyword overlap check uses extractedEntities JSON from prior analyses. If any prior analysis has malformed or empty extractedEntities — perhaps from an early test run before schema enforcement was added — the tokenization will fail silently or produce empty keyword sets. Add a null check before tokenizing prior analyses:
+if (!priorAnalysis.extractedEntities) continue;
+
+Three Checks to Run Right Now
+Check 1 — False correlation test
+Submit this:
+The app shows an error when the user clicks the button
+Then submit this:
+Getting an error message when I press the submit button
+These share surface terms but are not meaningfully similar. The similar bug factor should NOT award +20. If it does, your stop-word list needs error, user, button, click, press, submit, message, app.
+Check 2 — GitHub body overflow test
+Find a GitHub issue where the body alone is very long — a detailed bug report with embedded code blocks. Paste the URL and confirm the 14,000 char cap still applies and the toast fires correctly if truncation happened.
+Check 3 — Minified trace in full pipeline
+Paste this stack trace and run the full pipeline:
+TypeError: a is not a function
+    at t.<anonymous> (main.abc123.js:1:4521)
+    at e (vendor.def456.js:1:892)
+Confirm:
+
+Stack trace factor shows +10/25 in amber with "(minified — partial credit)" label
+Agent 3 asks a clarifying question about source maps rather than generating reproduction steps from an unreadable trace
+The overall score reflects the reduced stack trace value

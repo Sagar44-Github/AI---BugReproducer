@@ -26,6 +26,10 @@ import {
   RUBRIC_LABELS,
   type ScoredConfidence,
 } from "./confidenceScoring";
+import {
+  validateTestCode,
+  type TestSyntaxStatus,
+} from "./syntaxValidator";
 import type { ZodSchema } from "zod";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -64,6 +68,7 @@ export type PipelineResult = {
   hypotheses: string;
   reproductionSteps: string;
   testCode: string;
+  testSyntaxStatus: TestSyntaxStatus;
   flowDiagram: string;
   clarifyingQuestions: string;
   confidenceScore: number;
@@ -375,6 +380,102 @@ Rules:
       "Test assertions designed to fail with the bug present and pass when the root cause is fixed. Coverage aligns with highest-likelihood hypothesis.",
   });
 
+  // ── Syntax Validator (runs after Test Writer, before Synthesizer) ─────────
+  //    Deterministic check — no LLM call on the happy path.
+  //    On failure: one LLM correction attempt, then warn the user.
+
+  let finalTestData = testData;
+  let testSyntaxStatus: TestSyntaxStatus = "unchecked";
+
+  const syntaxResult = validateTestCode(testData.testCode, testData.framework, testData.language);
+
+  if (syntaxResult.status === "verified" || syntaxResult.status === "unchecked") {
+    testSyntaxStatus = syntaxResult.status;
+    onEvent({ type: "agent_start", agentName: "Syntax Validator", content: `Checking ${testData.framework} syntax...` });
+    onEvent({
+      type: "agent_done",
+      agentName: "Syntax Validator",
+      content: syntaxResult.status === "verified"
+        ? `Syntax valid — ${testData.framework} / ${testData.language}`
+        : `Syntax check skipped for framework: ${testData.framework}`,
+    });
+    onEvent({ type: "agent_validated", agentName: "Syntax Validator", content: "" });
+  } else {
+    // Syntax error detected — attempt one LLM correction
+    onEvent({
+      type: "agent_start",
+      agentName: "Syntax Validator",
+      content: `Syntax error in ${testData.framework} code — requesting correction...`,
+    });
+    onEvent({
+      type: "agent_retry",
+      agentName: "Syntax Validator",
+      content: syntaxResult.line
+        ? `Line ${syntaxResult.line}: ${syntaxResult.error ?? "syntax error"}`
+        : (syntaxResult.error ?? "syntax error detected"),
+    });
+
+    const correctionSystemPrompt = `You are a code quality assistant. A syntax error was detected in the test code you generated. Fix it and return the corrected JSON.
+
+CRITICAL: Respond ONLY with a valid JSON object. No markdown. No explanation. No code fences.
+Use this exact schema:
+${TEST_SCHEMA_HINT}`;
+
+    const correctionUserPrompt = `The following ${testData.framework} (${testData.language}) test code has a syntax error.
+
+${syntaxResult.line ? `Error at line ${syntaxResult.line}: ` : "Error: "}${syntaxResult.error ?? "syntax error"}
+
+FAULTY CODE:
+${testData.testCode}
+
+Fix ONLY the syntax error. Do not change test logic, assertions, or coverage areas. Return the COMPLETE corrected JSON object.`;
+
+    const { content: correctedRaw } = await runAgent(
+      "Syntax Validator",
+      correctionSystemPrompt,
+      correctionUserPrompt,
+      onEvent
+    );
+
+    const correctedParsed = safeParseStructured(TestWriterSchema, correctedRaw);
+    if (correctedParsed.success) {
+      const recheck = validateTestCode(
+        correctedParsed.data.testCode,
+        correctedParsed.data.framework,
+        correctedParsed.data.language
+      );
+      if (recheck.valid) {
+        finalTestData = correctedParsed.data;
+        testSyntaxStatus = "verified";
+        onEvent({ type: "agent_validated", agentName: "Syntax Validator", content: "Syntax corrected and verified" });
+      } else {
+        testSyntaxStatus = "warning";
+        onEvent({
+          type: "agent_done",
+          agentName: "Syntax Validator",
+          content: `Correction still has issues — review before running. ${recheck.error ?? ""}`,
+        });
+      }
+    } else {
+      testSyntaxStatus = "warning";
+      onEvent({
+        type: "agent_done",
+        agentName: "Syntax Validator",
+        content: "Correction failed schema validation — review before running",
+      });
+    }
+
+    auditTrail.push({
+      timestamp: new Date().toISOString(),
+      agent: "Syntax Validator",
+      action: "syntax_correction",
+      decision: testSyntaxStatus === "verified"
+        ? "Syntax corrected and verified on retry"
+        : "Syntax error persisted after one correction attempt — warning issued",
+      rationale: `Original error: ${syntaxResult.error ?? "unknown"}${syntaxResult.line ? ` at line ${syntaxResult.line}` : ""}`,
+    });
+  }
+
   // ── Agent 5: Analysis Synthesizer ─────────────────────────────────────────
   //    Receives all four prior validated outputs
 
@@ -402,7 +503,7 @@ Hypotheses:\n${JSON.stringify(hypothesesData.hypotheses, null, 2)}
 
 Reproduction steps:\n${JSON.stringify(stepData, null, 2)}
 
-Test framework: ${testData.framework} — coverage: ${testData.coverageAreas.join(", ")}`,
+Test framework: ${finalTestData.framework} — coverage: ${finalTestData.coverageAreas.join(", ")}`,
     onEvent
   );
 
@@ -425,10 +526,11 @@ Test framework: ${testData.framework} — coverage: ${testData.coverageAreas.joi
     extractedEntities: JSON.stringify(entityData),
     hypotheses: JSON.stringify(hypothesesData.hypotheses),
     reproductionSteps: JSON.stringify(stepData),
-    // Plain strings
-    testCode: testData.testCode,
+    // Plain strings — use finalTestData (may be syntax-corrected version)
+    testCode: finalTestData.testCode,
     flowDiagram: synthData.flowDiagram,
     clarifyingQuestions: JSON.stringify(synthData.clarifyingQuestions),
+    testSyntaxStatus,
     // Deterministic score from rubric — not LLM-generated
     confidenceScore: scored.score / 100,
     confidenceBreakdown: {

@@ -496,6 +496,9 @@ components:
           type: ["string", "null"]
         testCode:
           type: ["string", "null"]
+        testSyntaxStatus:
+          type: ["string", "null"]
+          enum: ["verified", "warning", "unchecked", null]
         flowDiagram:
           type: ["string", "null"]
         clarifyingQuestions:

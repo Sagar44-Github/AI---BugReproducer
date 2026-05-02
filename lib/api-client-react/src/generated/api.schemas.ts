@@ -107,6 +107,19 @@ export const BugAnalysisFullSeverity = {
   low: "low",
 } as const;
 
+/**
+ * @nullable
+ */
+export type BugAnalysisFullTestSyntaxStatus =
+  | (typeof BugAnalysisFullTestSyntaxStatus)[keyof typeof BugAnalysisFullTestSyntaxStatus]
+  | null;
+
+export const BugAnalysisFullTestSyntaxStatus = {
+  verified: "verified",
+  warning: "warning",
+  unchecked: "unchecked",
+} as const;
+
 export interface BugAnalysisFull {
   id: number;
   title: string;
@@ -139,6 +152,8 @@ export interface BugAnalysisFull {
   reproductionSteps?: string | null;
   /** @nullable */
   testCode?: string | null;
+  /** @nullable */
+  testSyntaxStatus?: BugAnalysisFullTestSyntaxStatus;
   /** @nullable */
   flowDiagram?: string | null;
   /** @nullable */

@@ -122,6 +122,14 @@ export const GetAnalysisResponse = zod.object({
   hypotheses: zod.string().nullish(),
   reproductionSteps: zod.string().nullish(),
   testCode: zod.string().nullish(),
+  testSyntaxStatus: zod
+    .union([
+      zod.literal("verified"),
+      zod.literal("warning"),
+      zod.literal("unchecked"),
+      zod.literal(null),
+    ])
+    .nullish(),
   flowDiagram: zod.string().nullish(),
   clarifyingQuestions: zod.string().nullish(),
   createdAt: zod.coerce.date(),
@@ -177,6 +185,14 @@ export const UpdateAnalysisResponse = zod.object({
   hypotheses: zod.string().nullish(),
   reproductionSteps: zod.string().nullish(),
   testCode: zod.string().nullish(),
+  testSyntaxStatus: zod
+    .union([
+      zod.literal("verified"),
+      zod.literal("warning"),
+      zod.literal("unchecked"),
+      zod.literal(null),
+    ])
+    .nullish(),
   flowDiagram: zod.string().nullish(),
   clarifyingQuestions: zod.string().nullish(),
   createdAt: zod.coerce.date(),

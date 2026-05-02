@@ -38,6 +38,9 @@ export const analysesTable = pgTable("analyses", {
   testCode: text("test_code"),
   flowDiagram: text("flow_diagram"),
   clarifyingQuestions: text("clarifying_questions"),
+  testSyntaxStatus: text("test_syntax_status", {
+    enum: ["verified", "warning", "unchecked"],
+  }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

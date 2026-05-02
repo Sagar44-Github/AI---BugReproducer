@@ -1015,8 +1015,36 @@ export function AnalysisDetail() {
 
               <TabsContent value="test" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
+                  <CardHeader className="pb-3 border-b border-border/50">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Generated Test Code</CardTitle>
+                      {analysis.testSyntaxStatus === "verified" && (
+                        <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono text-xs">
+                          <CheckCircle2 className="w-3 h-3 mr-1" />Syntax verified
+                        </Badge>
+                      )}
+                      {analysis.testSyntaxStatus === "warning" && (
+                        <Badge className="bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono text-xs">
+                          <AlertCircle className="w-3 h-3 mr-1" />Review before running
+                        </Badge>
+                      )}
+                      {(!analysis.testSyntaxStatus || analysis.testSyntaxStatus === "unchecked") && analysis.testCode && (
+                        <Badge variant="outline" className="text-muted-foreground font-mono text-xs opacity-60">
+                          syntax unchecked
+                        </Badge>
+                      )}
+                    </div>
+                  </CardHeader>
                   <CardContent className="p-0">
-                    <div className="bg-[#0a0a0a] rounded-lg p-6 font-mono text-sm whitespace-pre-wrap text-blue-300">
+                    {analysis.testSyntaxStatus === "warning" && (
+                      <div className="flex items-start gap-2 px-4 py-3 bg-amber-500/5 border-b border-amber-500/20 text-xs text-amber-300">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          Syntax validation failed after one correction attempt. Review this code locally before adding it to CI — it may contain syntax issues.
+                        </span>
+                      </div>
+                    )}
+                    <div className="bg-[#0a0a0a] rounded-b-lg p-6 font-mono text-sm whitespace-pre-wrap text-blue-300">
                       {analysis.testCode || "// No test code generated."}
                     </div>
                   </CardContent>
