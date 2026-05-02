@@ -1,0 +1,27 @@
+The Python validator uses spawnSync which is blocking. For the hackathon this is fine — concurrent load is minimal. But if two long Python test files are validated simultaneously, one blocks the event loop until the other completes. Not a problem tomorrow, but know it exists.
+The TypeScript pattern detection — you're detecting TS-specific syntax by pattern and treating it as valid. Make sure the patterns cover the most common TS constructs that would cause vm.Script to fail:
+
+Type annotations: const x: string = ...
+Generic types: Array<string>, Promise<void>
+Type assertions: value as string
+Interface declarations
+Enum declarations
+
+If any of these slip through the pattern detection and hit vm.Script, they'll produce a false syntax error. Run a quick test with a Cypress test file that has TypeScript generics and confirm it returns verified not warning.
+The correction prompt on retry — when the LLM receives the correction prompt with the line number and error, it needs to return the full schema JSON with the corrected testCode field, not just the corrected code block alone. Verify the correction prompt explicitly says this. If the LLM returns only the fixed code without the schema wrapper, the Zod validation on the Test Writer schema will fail and you'll get an AgentValidationError instead of a syntax warning — a harder error than you need.
+The warning badge inline strip — make sure the warning message shown to the user is specific, not generic. It should say something like "Syntax error found on line 14: invalid syntax. This code was not corrected after retry. Review before running." If it just says "Review before running" with no detail, it looks like a lazy fallback.
+DB migration — the test_syntax_status column was added and migrated. Confirm the migration ran on whatever environment you're demoing from. If you're demoing from a fresh clone or a different machine than where you developed, the column might not exist and the insert will fail silently or crash.
+
+Two Checks to Run Right Now
+Check 1 — TypeScript false positive
+Paste this as your bug report and let the Test Writer generate Cypress code:
+On the product listing page, clicking a product card 
+does not navigate to the product detail page. 
+Expected: navigation to /products/:id. 
+Actual: page stays the same. Browser: Chrome 120.
+If the generated Cypress code contains TypeScript syntax (type annotations, generics), confirm the badge shows verified not warning. If it shows warning on valid TS code, your pattern detection has a gap.
+Check 2 — Correction prompt schema compliance
+Deliberately trigger a syntax error by submitting a bug that tends to produce complex Python code, then intercept the retry. Confirm the LLM returns the full Test Writer schema JSON with the corrected testCode field inside it — not a raw code block. If it returns raw code, the correction prompt needs this line added explicitly:
+Return the complete JSON object matching the original schema.
+Do not return only the corrected code — return the full JSON 
+with testCode containing the corrected code.
