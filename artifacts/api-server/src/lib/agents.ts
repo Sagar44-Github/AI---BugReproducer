@@ -154,7 +154,7 @@ async function runAgent(
   try {
     const stream = await openai.chat.completions.create(
       {
-        model: "gpt-4o",
+        model: "llama-3.3-70b-versatile",
         max_completion_tokens: 4096,
         messages: [
           { role: "system", content: systemPrompt },
@@ -853,7 +853,7 @@ export async function runEnvDiff(
   label2: string
 ): Promise<string> {
   const response = await openai.chat.completions.create({
-    model: "gpt-4o",
+    model: "llama-3.3-70b-versatile",
     max_completion_tokens: 3000,
     messages: [
       {
@@ -915,7 +915,7 @@ export async function runNl2Test(
   const context = codeContext ? `\n\nRelevant code:\n\`\`\`\n${codeContext}\n\`\`\`` : "";
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4o",
+    model: "llama-3.3-70b-versatile",
     max_completion_tokens: 3000,
     messages: [
       {
@@ -957,7 +957,7 @@ export async function runFlakyDetector(
   language: string
 ): Promise<string> {
   const response = await openai.chat.completions.create({
-    model: "gpt-4o",
+    model: "llama-3.3-70b-versatile",
     max_completion_tokens: 3000,
     messages: [
       {
@@ -1027,7 +1027,7 @@ export async function runCorrelation(
     .join("\n\n---\n\n");
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4o",
+    model: "llama-3.3-70b-versatile",
     max_completion_tokens: 2000,
     messages: [
       {
