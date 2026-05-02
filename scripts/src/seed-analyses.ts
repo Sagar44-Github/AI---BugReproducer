@@ -5,7 +5,7 @@
  * Re-seed (truncate first): pnpm --filter @workspace/scripts run seed -- --force
  */
 
-import { db, analysesTable } from "@workspace/db";
+import { db, analysesTable, pool } from "@workspace/db";
 
 const force = process.argv.includes("--force");
 
@@ -591,14 +591,20 @@ const SEEDS = [
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const existing = await db
-    .select({ id: analysesTable.id })
-    .from(analysesTable)
-    .limit(25);
-
-  if (existing.length >= 20 && !force) {
-    console.log(`Database already has ${existing.length} analyses. Use --force to re-seed.`);
-    process.exit(0);
+  if (force) {
+    const deleted = await pool.query(
+      "DELETE FROM analyses WHERE tags LIKE '%seed-data%'"
+    );
+    console.log(`Force mode: removed ${deleted.rowCount ?? 0} existing seed entries.`);
+  } else {
+    const existing = await db
+      .select({ id: analysesTable.id })
+      .from(analysesTable)
+      .limit(25);
+    if (existing.length >= 20) {
+      console.log(`Database already has ${existing.length} analyses. Use --force to replace seed entries.`);
+      process.exit(0);
+    }
   }
 
   console.log(`Inserting ${SEEDS.length} seed analyses...`);

@@ -26,6 +26,7 @@ import {
   RUBRIC_LABELS,
   type ScoredConfidence,
 } from "./confidenceScoring";
+import { generateMermaidFromDiagram } from "./diagramGenerator";
 import {
   validateTestCode,
   type TestSyntaxStatus,
@@ -495,7 +496,11 @@ Use this exact schema:
 ${SYNTHESIZER_SCHEMA_HINT}
 
 Rules:
-- flowDiagram: Mermaid flowchart source ONLY — no fences, no backticks, starts with "flowchart TD" or similar
+- diagram: build a structured execution-path diagram — see schema for node/edge types and ID rules
+  - The diagram MUST reflect the actual reproduction path found — different steps, different nodes, different failure point
+  - Every eliminated hypothesis must appear as an 'eliminated' node connected by a dashed edge (isAlternate: true)
+  - Node IDs MUST be alphanumeric+underscore only, starting with a letter: "S0", "N1", "FAIL", "ELIM_cache" — NOT "end" (reserved)
+  - Scale correctly: a 3-step path should have 5-7 nodes; a 7-step path should have 9-12 nodes
 - clarifyingQuestions: exactly 3-5 targeted questions that would confirm the root cause; make them specific and actionable
 - confidenceEvidence: list 2-4 specific pieces of evidence from the analysis that support the reproduction path
 - confidenceAssumptions: list any assumptions made due to incomplete information (can be empty array if none)
@@ -534,7 +539,7 @@ Test framework: ${finalTestData.framework} — coverage: ${finalTestData.coverag
     reproductionSteps: JSON.stringify(stepData),
     // Plain strings — use finalTestData (may be syntax-corrected version)
     testCode: finalTestData.testCode,
-    flowDiagram: synthData.flowDiagram,
+    flowDiagram: generateMermaidFromDiagram(synthData.diagram),
     clarifyingQuestions: JSON.stringify(synthData.clarifyingQuestions),
     testSyntaxStatus,
     // Deterministic score from rubric — not LLM-generated

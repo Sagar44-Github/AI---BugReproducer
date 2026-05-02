@@ -24,6 +24,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { StatusBadge } from "@/components/status-badge";
+import { MermaidDiagram } from "@/components/MermaidDiagram";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -448,6 +449,12 @@ export function AnalysisDetail() {
       // ignore
     }
   }, [id, annotationsLoaded]);
+
+  // Prefetch annotations on mount so they are ready when the Collaborate tab
+  // is opened — ensures a page refresh shows existing annotations immediately.
+  useEffect(() => {
+    loadAnnotations();
+  }, [loadAnnotations]);
 
   const connectCollaboration = useCallback(() => {
     if (collaborateSSERef.current) return;
@@ -1096,17 +1103,30 @@ export function AnalysisDetail() {
 
               <TabsContent value="diagram" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
+                  <CardHeader className="pb-3 border-b border-border/50">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                        <GitMerge className="w-4 h-4 text-primary" />
+                        Execution Flow Diagram
+                      </CardTitle>
+                      {analysis.flowDiagram && (
+                        <details className="text-xs">
+                          <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none font-mono">
+                            View Mermaid source
+                          </summary>
+                          <div className="mt-2 bg-[#09090b] rounded border border-border/50 p-4 font-mono text-xs whitespace-pre-wrap text-cyan-300 overflow-x-auto max-h-48">
+                            {analysis.flowDiagram}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  </CardHeader>
                   <CardContent className="p-6">
                     {analysis.flowDiagram ? (
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <GitMerge className="w-4 h-4 text-primary" />
-                          <span>Copy the Mermaid source below into <a href="https://mermaid.live" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:text-primary/80">mermaid.live</a> or any Mermaid renderer to view the diagram.</span>
-                        </div>
-                        <div className="bg-[#0a0a0a] rounded border border-border/50 p-5 font-mono text-sm whitespace-pre-wrap text-cyan-300 overflow-x-auto">
-                          {analysis.flowDiagram}
-                        </div>
-                      </div>
+                      <MermaidDiagram
+                        chart={analysis.flowDiagram}
+                        className="min-h-[260px]"
+                      />
                     ) : (
                       <div className="bg-muted/30 rounded border border-border/50 p-6 flex flex-col items-center justify-center min-h-[300px]">
                         <GitMerge className="w-8 h-8 text-primary/50 mb-4" />
