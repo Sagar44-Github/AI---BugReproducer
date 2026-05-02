@@ -503,12 +503,27 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
     .set({ status: "running", updatedAt: new Date() })
     .where(eq(analysesTable.id, params.data.id));
 
+  // Deterministic pre-check: does any other completed analysis exist in the DB?
+  // Used by the confidence scoring rubric for the "similar_bug" factor.
+  const priorAnalyses = await db
+    .select({ id: analysesTable.id })
+    .from(analysesTable)
+    .where(
+      and(
+        ne(analysesTable.id, params.data.id),
+        eq(analysesTable.status, "completed")
+      )
+    )
+    .limit(1);
+  const hasSimilarBugs = priorAnalyses.length > 0;
+
   try {
     const result = await runBugReproductionPipeline(
       analysis.rawInput,
       analysis.inputType,
       analysis.codeContext,
-      sendEvent
+      sendEvent,
+      hasSimilarBugs
     );
 
     await db

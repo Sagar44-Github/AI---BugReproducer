@@ -20,6 +20,12 @@ import {
   type TestWriterOutput,
   type SynthesizerOutput,
 } from "./agentSchemas";
+import {
+  calculateConfidenceScore,
+  RUBRIC_WEIGHTS,
+  RUBRIC_LABELS,
+  type ScoredConfidence,
+} from "./confidenceScoring";
 import type { ZodSchema } from "zod";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -47,9 +53,10 @@ export type AuditEntry = {
 
 export type ConfidenceBreakdown = {
   score: number;
+  rubric: Record<string, number>;
+  missing: string[];
   evidence: string[];
   assumptions: string[];
-  missing: string[];
 };
 
 export type PipelineResult = {
@@ -206,7 +213,8 @@ export async function runBugReproductionPipeline(
   rawInput: string,
   inputType: string,
   codeContext: string | null | undefined,
-  onEvent: (event: AgentEvent) => void
+  onEvent: (event: AgentEvent) => void,
+  hasSimilarBugs = false
 ): Promise<PipelineResult> {
   const sourceLabel = SOURCE_TYPE_LABELS[inputType] ?? "bug report";
   const sourceHint = SOURCE_TYPE_HINTS[inputType] ?? "";
@@ -245,6 +253,22 @@ Rules:
     action: "extracted_entities",
     decision: `Extracted entities: component="${entityData.component}", trigger="${entityData.triggerAction}", frequency=${entityData.frequency}, ${entityData.errorMessages.length} error message(s)`,
     rationale: `Processed ${sourceLabel} to identify all key debugging signals. Entity schema validated before passing to Hypothesis Generator.`,
+  });
+
+  // ── Deterministic confidence scoring (runs immediately after entity extraction) ──
+  //    No LLM involvement — score is fully auditable and reproducible.
+  const scored = calculateConfidenceScore(entityData, rawInput, codeContext, hasSimilarBugs);
+
+  const rubricLines = (Object.keys(scored.rubric) as (keyof typeof scored.rubric)[])
+    .map((k) => `  ${RUBRIC_LABELS[k as keyof typeof RUBRIC_LABELS] ?? k}: ${scored.rubric[k]}/${RUBRIC_WEIGHTS[k as keyof typeof RUBRIC_WEIGHTS]}`)
+    .join("\n");
+
+  auditTrail.push({
+    timestamp: new Date().toISOString(),
+    agent: "Confidence Scorer",
+    action: "calculated_score",
+    decision: `Deterministic score: ${scored.score}/100. Factors awarded: ${Object.values(scored.rubric).filter(v => v > 0).length}/7.`,
+    rationale: `Score computed from rubric — not LLM-generated. Rubric:\n${rubricLines}`,
   });
 
   // ── Agent 2: Hypothesis Generator ────────────────────────────────────────
@@ -366,8 +390,10 @@ ${SYNTHESIZER_SCHEMA_HINT}
 Rules:
 - flowDiagram: Mermaid flowchart source ONLY — no fences, no backticks, starts with "flowchart TD" or similar
 - clarifyingQuestions: exactly 3-5 targeted questions that would confirm the root cause; make them specific and actionable
-- confidenceScore: integer 0-100 reflecting how confident the pipeline is in its reproduction
-- severity: based on user impact, component criticality, reproducibility, and data risk`,
+- confidenceEvidence: list 2-4 specific pieces of evidence from the analysis that support the reproduction path
+- confidenceAssumptions: list any assumptions made due to incomplete information (can be empty array if none)
+- severity: based on user impact, component criticality, reproducibility, and data risk
+- NOTE: Do NOT include a confidenceScore field — the confidence score has already been calculated deterministically`,
     `Full analysis summary:
 
 Entities:\n${JSON.stringify(entityData, null, 2)}
@@ -384,13 +410,13 @@ Test framework: ${testData.framework} — coverage: ${testData.coverageAreas.joi
     timestamp: new Date().toISOString(),
     agent: "Analysis Synthesizer",
     action: "synthesized_analysis",
-    decision: `Final confidence: ${synthData.confidenceScore}%, severity: ${synthData.severity}. Generated flow diagram and ${synthData.clarifyingQuestions.length} clarifying questions.`,
-    rationale: `Confidence derived from: ${synthData.confidenceEvidence.slice(0, 2).join("; ")}. Severity based on user impact and component criticality.`,
+    decision: `Deterministic confidence: ${scored.score}%, severity: ${synthData.severity}. Generated flow diagram and ${synthData.clarifyingQuestions.length} clarifying questions.`,
+    rationale: `Qualitative evidence: ${synthData.confidenceEvidence.slice(0, 2).join("; ")}. Severity based on user impact and component criticality.`,
   });
 
   logger.info(
-    { confidenceScore: synthData.confidenceScore / 100, severity: synthData.severity, inputType },
-    "Pipeline complete — all 5 agents validated"
+    { confidenceScore: scored.score / 100, severity: synthData.severity, inputType },
+    "Pipeline complete — all 5 agents validated, confidence score is deterministic"
   );
 
   // ── Serialize structured outputs for DB storage ───────────────────────────
@@ -403,13 +429,14 @@ Test framework: ${testData.framework} — coverage: ${testData.coverageAreas.joi
     testCode: testData.testCode,
     flowDiagram: synthData.flowDiagram,
     clarifyingQuestions: JSON.stringify(synthData.clarifyingQuestions),
-    // Numeric + enum
-    confidenceScore: synthData.confidenceScore / 100,
+    // Deterministic score from rubric — not LLM-generated
+    confidenceScore: scored.score / 100,
     confidenceBreakdown: {
-      score: synthData.confidenceScore,
+      score: scored.score,
+      rubric: scored.rubric,
+      missing: scored.missing,
       evidence: synthData.confidenceEvidence,
       assumptions: synthData.confidenceAssumptions,
-      missing: synthData.confidenceMissing,
     },
     severity: synthData.severity,
     severityReason: synthData.severityReason,

@@ -58,9 +58,10 @@ type AgentState = {
 
 type ConfidenceBreakdown = {
   score: number;
+  rubric?: Record<string, number>;
+  missing: string[];
   evidence: string[];
   assumptions: string[];
-  missing: string[];
 };
 
 type AuditEntry = {
@@ -709,21 +710,39 @@ export function AnalysisDetail() {
         </div>
       </div>
 
-      {/* Confidence Breakdown (Feature 1) */}
+      {/* Confidence Breakdown — Deterministic Rubric */}
       {confidenceBreakdown && (
         <Card className="border-primary/20">
           <button
             className="w-full px-5 py-4 flex items-center justify-between text-left"
             onClick={() => setShowConfidenceDetails(v => !v)}
           >
-            <div className="flex items-center gap-3">
-              <Shield className="w-5 h-5 text-primary" />
-              <div>
-                <span className="font-semibold text-sm">Confidence Breakdown</span>
-                <span className="text-muted-foreground text-sm ml-2">{confidenceBreakdown.score}% — why this score was given</span>
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              <Shield className="w-5 h-5 text-primary shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="font-semibold text-sm">Confidence Score</span>
+                  <span className="font-mono font-bold text-primary text-sm">{confidenceBreakdown.score}%</span>
+                  <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/20 font-mono">
+                    deterministic rubric
+                  </Badge>
+                </div>
+                <div className="mt-1 flex items-center gap-2">
+                  <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden max-w-48">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all"
+                      style={{ width: `${confidenceBreakdown.score}%` }}
+                    />
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {confidenceBreakdown.missing.length === 0
+                      ? "All rubric factors present"
+                      : `${confidenceBreakdown.missing.length} factor${confidenceBreakdown.missing.length > 1 ? "s" : ""} missing`}
+                  </span>
+                </div>
               </div>
             </div>
-            {showConfidenceDetails ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+            {showConfidenceDetails ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
           </button>
           <AnimatePresence>
             {showConfidenceDetails && (
@@ -734,40 +753,83 @@ export function AnalysisDetail() {
                 transition={{ duration: 0.2 }}
                 className="overflow-hidden border-t border-border/50"
               >
-                <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <h4 className="text-xs uppercase tracking-wider font-semibold text-green-400 mb-2">Supporting Evidence</h4>
-                    <ul className="space-y-1.5">
-                      {confidenceBreakdown.evidence.map((e, i) => (
-                        <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0 mt-0.5" />
-                          {e}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <h4 className="text-xs uppercase tracking-wider font-semibold text-amber-400 mb-2">Assumptions Made</h4>
-                    <ul className="space-y-1.5">
-                      {confidenceBreakdown.assumptions.map((a, i) => (
-                        <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
-                          <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-                          {a}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <h4 className="text-xs uppercase tracking-wider font-semibold text-red-400 mb-2">Missing Information</h4>
-                    <ul className="space-y-1.5">
-                      {confidenceBreakdown.missing.map((m, i) => (
-                        <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
-                          <Search className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-                          {m}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                <div className="p-5 space-y-5">
+                  {/* Rubric factor grid */}
+                  {confidenceBreakdown.rubric && (
+                    <div>
+                      <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-3">
+                        Scoring Rubric — {Object.values(confidenceBreakdown.rubric).reduce((a, b) => a + b, 0)} raw pts → {confidenceBreakdown.score}/100
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {(Object.entries(confidenceBreakdown.rubric) as [string, number][]).map(([key, pts]) => {
+                          const maxPts: Record<string, number> = {
+                            environment: 20, frequency: 15, stack_trace: 25,
+                            expected_behavior: 15, similar_bug: 20, code_snippet: 10,
+                            reproduction_steps: 15,
+                          };
+                          const labels: Record<string, string> = {
+                            environment: "Environment specified",
+                            frequency: "Frequency known",
+                            stack_trace: "Stack trace present",
+                            expected_behavior: "Expected behavior stated",
+                            similar_bug: "Similar historical bug",
+                            code_snippet: "Code snippet provided",
+                            reproduction_steps: "Repro steps given",
+                          };
+                          const max = maxPts[key] ?? 0;
+                          const earned = pts > 0;
+                          return (
+                            <div
+                              key={key}
+                              className={`flex items-center gap-3 rounded px-3 py-2 border text-xs ${
+                                earned
+                                  ? "border-emerald-500/30 bg-emerald-500/5"
+                                  : "border-border/40 bg-muted/20 opacity-60"
+                              }`}
+                            >
+                              <div className={`w-2 h-2 rounded-full shrink-0 ${earned ? "bg-emerald-400" : "bg-muted-foreground/30"}`} />
+                              <span className="flex-1 text-foreground">{labels[key] ?? key.replace(/_/g, " ")}</span>
+                              <span className={`font-mono font-bold shrink-0 ${earned ? "text-emerald-400" : "text-muted-foreground"}`}>
+                                +{pts}<span className="text-muted-foreground font-normal">/{max}</span>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Qualitative reasoning from synthesizer */}
+                  {(confidenceBreakdown.evidence.length > 0 || confidenceBreakdown.assumptions.length > 0) && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-border/40">
+                      {confidenceBreakdown.evidence.length > 0 && (
+                        <div>
+                          <h4 className="text-xs uppercase tracking-wider font-semibold text-green-400 mb-2">Supporting Evidence</h4>
+                          <ul className="space-y-1.5">
+                            {confidenceBreakdown.evidence.map((e, i) => (
+                              <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0 mt-0.5" />
+                                {e}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {confidenceBreakdown.assumptions.length > 0 && (
+                        <div>
+                          <h4 className="text-xs uppercase tracking-wider font-semibold text-amber-400 mb-2">Assumptions Made</h4>
+                          <ul className="space-y-1.5">
+                            {confidenceBreakdown.assumptions.map((a, i) => (
+                              <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                                <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                                {a}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}
