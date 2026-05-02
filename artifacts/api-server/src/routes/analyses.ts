@@ -56,6 +56,23 @@ router.post("/analyses", async (req, res): Promise<void> => {
     return;
   }
 
+  const { title, rawInput, githubUrl, inputType } = parsed.data;
+
+  if (!title || !title.trim()) {
+    res.status(400).json({ error: "Title is required and cannot be empty." });
+    return;
+  }
+
+  const isGithubType = inputType === "github_url";
+  if (isGithubType && !githubUrl?.trim()) {
+    res.status(400).json({ error: "A GitHub URL is required for github_url input type." });
+    return;
+  }
+  if (!isGithubType && (!rawInput || !rawInput.trim())) {
+    res.status(400).json({ error: "Raw input is required and cannot be empty." });
+    return;
+  }
+
   const [analysis] = await db
     .insert(analysesTable)
     .values({

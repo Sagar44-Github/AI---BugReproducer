@@ -319,6 +319,18 @@ SEVERITY_REASON: One sentence explaining the severity rating.`,
     rationale: "Confidence derived from input quality, specificity of reproduction steps, and hypothesis evidence strength. Severity based on user impact and component criticality.",
   });
 
+  // Extract just the mermaid block for flowDiagram
+  const mermaidMatch = analysisOutput.match(/```mermaid([\s\S]*?)```/);
+  const flowDiagram = mermaidMatch
+    ? `\`\`\`mermaid${mermaidMatch[1]}\`\`\``
+    : analysisOutput;
+
+  // Extract just the clarifying questions section (between ## 2 and ## 3)
+  const questionsMatch = analysisOutput.match(
+    /##\s*2[\.\)]\s*Clarifying Questions?\s*\n([\s\S]*?)(?=##\s*3[\.\)]|CONFIDENCE_SCORE:|$)/i
+  );
+  const clarifyingQuestions = questionsMatch ? questionsMatch[1].trim() : "";
+
   logger.info({ confidenceScore, severity, inputType }, "Pipeline complete");
 
   return {
@@ -326,8 +338,8 @@ SEVERITY_REASON: One sentence explaining the severity rating.`,
     hypotheses,
     reproductionSteps,
     testCode,
-    flowDiagram: analysisOutput,
-    clarifyingQuestions: analysisOutput,
+    flowDiagram,
+    clarifyingQuestions,
     confidenceScore,
     confidenceBreakdown,
     severity,

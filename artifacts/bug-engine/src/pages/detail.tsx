@@ -598,12 +598,22 @@ export function AnalysisDetail() {
               <TabsContent value="diagram" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
                   <CardContent className="p-6">
-                    <div className="bg-muted/30 rounded border border-border/50 p-6 flex flex-col items-center justify-center min-h-[300px]">
-                      <GitMerge className="w-8 h-8 text-primary/50 mb-4" />
-                      <div className="font-mono text-sm whitespace-pre-wrap text-center max-w-2xl text-muted-foreground">
-                        {analysis.flowDiagram || "Flow diagram not available."}
+                    {analysis.flowDiagram ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <GitMerge className="w-4 h-4 text-primary" />
+                          <span>Copy the Mermaid source below into <a href="https://mermaid.live" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:text-primary/80">mermaid.live</a> or any Mermaid renderer to view the diagram.</span>
+                        </div>
+                        <div className="bg-[#0a0a0a] rounded border border-border/50 p-5 font-mono text-sm whitespace-pre-wrap text-cyan-300 overflow-x-auto">
+                          {analysis.flowDiagram}
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="bg-muted/30 rounded border border-border/50 p-6 flex flex-col items-center justify-center min-h-[300px]">
+                        <GitMerge className="w-8 h-8 text-primary/50 mb-4" />
+                        <p className="text-sm text-muted-foreground">Flow diagram not available. Run the pipeline to generate one.</p>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -611,9 +621,16 @@ export function AnalysisDetail() {
               <TabsContent value="questions" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
                   <CardContent className="p-6">
-                    <div className="bg-destructive/5 rounded-lg border border-destructive/20 p-6 font-mono text-sm whitespace-pre-wrap text-destructive-foreground">
-                      {analysis.clarifyingQuestions || "No clarifying questions needed."}
-                    </div>
+                    {analysis.clarifyingQuestions ? (
+                      <div className="space-y-3">
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Targeted Clarifying Questions</p>
+                        <div className="bg-muted/20 rounded-lg border border-border/50 p-5 font-mono text-sm whitespace-pre-wrap text-muted-foreground leading-relaxed">
+                          {analysis.clarifyingQuestions}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground text-center py-8">No clarifying questions needed.</p>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
