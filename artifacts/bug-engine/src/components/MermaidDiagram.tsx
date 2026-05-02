@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
+/**
+ * Call this as early as possible (e.g. on component mount) to start warming
+ * the Mermaid module so it is ready before the user clicks the Flow tab.
+ */
+export function preloadMermaid(): void {
+  void import("mermaid");
+}
+
 interface MermaidDiagramProps {
   chart: string;
   className?: string;

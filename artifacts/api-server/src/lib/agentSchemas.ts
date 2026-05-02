@@ -118,7 +118,16 @@ export type DiagramNode = z.infer<typeof DiagramNodeSchema>;
 export type DiagramEdge = z.infer<typeof DiagramEdgeSchema>;
 export type DiagramOutput = z.infer<typeof DiagramSchema>;
 
-// ─── Structured validation error ─────────────────────────────────────────────
+// ─── Structured validation errors ────────────────────────────────────────────
+
+export class AgentTimeoutError extends Error {
+  readonly agent: string;
+  constructor(agent: string) {
+    super(`[${agent}] timed out after two attempts`);
+    this.name = "AgentTimeoutError";
+    this.agent = agent;
+  }
+}
 
 export class AgentValidationError extends Error {
   readonly agent: string;
@@ -294,8 +303,10 @@ Node type rules:
 - eliminated: a hypothesis that was ruled out — shown as a dead-end branch
 
 Node ID rules: alphanumeric + underscores ONLY, must start with a letter or underscore.
-Valid IDs: "S0", "N1", "N2", "FAIL", "END", "ELIM_rate_limit"
-INVALID IDs (do not use): "Start Node", "N-1", "end" (reserved), "step 1"
+VALID IDs:   "S0", "N1", "auth_check", "db_query", "failure_point", "ELIM_cache", "END"
+INVALID IDs: "auth-check" (hyphen banned), "3rdPartyAPI" (starts with digit), "1_start" (starts with digit),
+             "end" (Mermaid reserved keyword), "N-1" (hyphen), "step 1" (space), "Start Node" (space)
+Every character must be a letter, digit, or underscore. Hyphens, spaces, and dots are not allowed.
 
 Diagram construction rules:
 - Every eliminated hypothesis must appear as at least one 'eliminated' node connected by a dashed edge (isAlternate: true)

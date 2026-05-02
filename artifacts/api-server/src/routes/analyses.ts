@@ -9,7 +9,7 @@ import {
   UpdateAnalysisBody,
 } from "@workspace/api-zod";
 import { runBugReproductionPipeline, runCorrelation, type AgentEvent } from "../lib/agents";
-import { AgentValidationError } from "../lib/agentSchemas";
+import { AgentValidationError, AgentTimeoutError } from "../lib/agentSchemas";
 import { logger } from "../lib/logger";
 import type { Response } from "express";
 
@@ -615,17 +615,19 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
       sendEvent({
         type: "error",
         agentName: err.agent,
-        content: JSON.stringify({
-          agent: err.agent,
-          reason: err.reason,
-          rawOutput: err.rawOutput.slice(0, 300),
-        }),
+        content: `${err.agent} returned an unexpected response after two attempts. Try running the pipeline again — if it keeps failing, try simplifying or shortening the bug description.`,
+      });
+    } else if (err instanceof AgentTimeoutError) {
+      sendEvent({
+        type: "error",
+        agentName: err.agent,
+        content: `${err.agent} timed out twice in a row. Try again — if it keeps happening, try a shorter bug description.`,
       });
     } else {
       sendEvent({
         type: "error",
         agentName: "System",
-        content: "An unexpected error occurred during the pipeline.",
+        content: "Something went wrong. Your input has been saved — try running the pipeline again.",
       });
     }
   }

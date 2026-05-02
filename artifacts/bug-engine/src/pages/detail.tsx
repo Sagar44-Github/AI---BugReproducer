@@ -24,7 +24,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { StatusBadge } from "@/components/status-badge";
-import { MermaidDiagram } from "@/components/MermaidDiagram";
+import { MermaidDiagram, preloadMermaid } from "@/components/MermaidDiagram";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -43,7 +43,9 @@ type AgentEvent = {
     | "agent_validated"
     | "agent_retry"
     | "pipeline_done"
-    | "error";
+    | "error"
+    | "rate_limit"
+    | "timeout";
   agentName: string;
   content: string;
 };
@@ -382,7 +384,22 @@ export function AnalysisDetail() {
   const [isRunning, setIsRunning] = useState(false);
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
   const [pipelineError, setPipelineError] = useState<string | null>(null);
+  const [rateLimitInfo, setRateLimitInfo] = useState<{ agentName: string; countdown: number } | null>(null);
+  const [timeoutMessage, setTimeoutMessage] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Warm the Mermaid renderer as soon as the page mounts so it is ready
+  // before the user clicks the Flow tab.
+  useEffect(() => { preloadMermaid(); }, []);
+
+  // Self-propagating countdown for rate-limit waits
+  useEffect(() => {
+    if (!rateLimitInfo || rateLimitInfo.countdown <= 0) return;
+    const t = setTimeout(() => {
+      setRateLimitInfo(prev => prev ? { ...prev, countdown: prev.countdown - 1 } : null);
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [rateLimitInfo]);
 
   // Confidence breakdown
   const [showConfidenceDetails, setShowConfidenceDetails] = useState(false);
@@ -540,6 +557,8 @@ export function AnalysisDetail() {
     setIsRunning(true);
     setAgents({});
     setPipelineError(null);
+    setRateLimitInfo(null);
+    setTimeoutMessage(null);
     abortControllerRef.current = new AbortController();
 
     try {
@@ -571,15 +590,36 @@ export function AnalysisDetail() {
                 queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(id) });
                 setIsRunning(false);
                 setCorrelationsFetched(false);
+                setRateLimitInfo(null);
+                setTimeoutMessage(null);
                 toast({ title: "Pipeline Complete", description: "Bug reproduction analysis finished successfully." });
                 break;
               }
 
               if (event.type === "error") {
                 setPipelineError(event.content);
+                setRateLimitInfo(null);
+                setTimeoutMessage(null);
                 setIsRunning(false);
                 queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(id) });
                 break;
+              }
+
+              if (event.type === "rate_limit") {
+                const seconds = parseInt(event.content, 10) || 30;
+                setRateLimitInfo({ agentName: event.agentName, countdown: seconds });
+                continue;
+              }
+
+              if (event.type === "timeout") {
+                setTimeoutMessage(event.content);
+                continue;
+              }
+
+              // Clear transient banners when an agent (re)starts — the wait is over
+              if (event.type === "agent_start") {
+                setRateLimitInfo(null);
+                setTimeoutMessage(null);
               }
 
               if (event.type === "agent_validated") {
@@ -978,36 +1018,51 @@ export function AnalysisDetail() {
                 </motion.div>
               ))}
             </AnimatePresence>
+            {timeoutMessage && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <Card className="border-amber-500/30 bg-amber-500/5">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <Loader2 className="w-4 h-4 text-amber-400/80 animate-spin shrink-0" />
+                      <div>
+                        <p className="text-sm font-semibold text-amber-300/90">Slow response detected</p>
+                        <p className="text-xs text-amber-400/70 font-mono mt-0.5">{timeoutMessage}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+            {rateLimitInfo && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <Card className="border-amber-500/50 bg-amber-500/10">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <Loader2 className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
+                      <div>
+                        <p className="text-sm font-semibold text-amber-300">Processing limit reached</p>
+                        <p className="text-xs text-amber-400/80 font-mono mt-0.5">
+                          {rateLimitInfo.agentName} resuming in{" "}
+                          <span className="font-bold text-amber-300">{rateLimitInfo.countdown}s</span>
+                          {" "}— waiting for the API rate limit to reset
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
             {pipelineError && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                 <Card className="border-destructive/50 bg-destructive/10">
-                  <CardContent className="p-4 space-y-2">
-                    {(() => {
-                      try {
-                        const parsed = JSON.parse(pipelineError) as { agent: string; reason: string; rawOutput?: string };
-                        return (
-                          <>
-                            <div className="flex items-center gap-2">
-                              <AlertCircle className="w-5 h-5 text-destructive shrink-0" />
-                              <span className="font-semibold text-sm text-destructive-foreground">Agent Validation Failed: {parsed.agent}</span>
-                            </div>
-                            <p className="text-xs font-mono text-destructive-foreground/80 ml-7">{parsed.reason}</p>
-                            {parsed.rawOutput && (
-                              <div className="ml-7 bg-black/30 rounded p-2 text-xs font-mono text-gray-400 max-h-24 overflow-y-auto whitespace-pre-wrap">
-                                {parsed.rawOutput}
-                              </div>
-                            )}
-                          </>
-                        );
-                      } catch {
-                        return (
-                          <div className="flex items-start gap-3">
-                            <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
-                            <div className="text-sm font-mono text-destructive-foreground whitespace-pre-wrap">{pipelineError}</div>
-                          </div>
-                        );
-                      }
-                    })()}
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="font-semibold text-sm text-destructive-foreground">Pipeline stopped</p>
+                        <p className="text-sm text-destructive-foreground/80">{pipelineError}</p>
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
               </motion.div>

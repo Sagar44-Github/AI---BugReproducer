@@ -7,6 +7,7 @@ import {
   TestWriterSchema,
   SynthesizerSchema,
   AgentValidationError,
+  AgentTimeoutError,
   safeParseStructured,
   formatZodErrors,
   ENTITY_SCHEMA_HINT,
@@ -43,7 +44,9 @@ export type AgentEvent = {
     | "agent_validated"
     | "agent_retry"
     | "pipeline_done"
-    | "error";
+    | "error"
+    | "rate_limit"
+    | "timeout";
   agentName: string;
   content: string;
 };
@@ -111,39 +114,96 @@ const SOURCE_TYPE_HINTS: Record<string, string> = {
 };
 
 // ─── Low-level agent runner (single LLM call, streaming) ─────────────────────
+//
+// Handles three failure classes transparently before bubbling up:
+//   1. Rate limit (429)  → emit rate_limit event, wait retry-after, retry once more
+//   2. First timeout     → emit timeout event, wait 10 s, retry once
+//   3. Second timeout    → throw AgentTimeoutError (caught by route handler)
+//
+// Max LLM retries from this function: 4 (3 rate-limit retries + 1 timeout retry)
+
+const AGENT_TIMEOUT_MS = 45_000;
+const MAX_RATE_LIMIT_RETRIES = 3;
 
 async function runAgent(
   agentName: string,
   systemPrompt: string,
   userPrompt: string,
-  onEvent: (event: AgentEvent) => void
+  onEvent: (event: AgentEvent) => void,
+  _attempt = 1,
+  _timeoutAttempts = 0
 ): Promise<{ content: string; duration: number }> {
-  onEvent({ type: "agent_start", agentName, content: `Starting ${agentName}...` });
+  if (_attempt === 1 && _timeoutAttempts === 0) {
+    onEvent({ type: "agent_start", agentName, content: `Starting ${agentName}...` });
+  }
 
   const startTime = Date.now();
   let fullContent = "";
 
-  const stream = await openai.chat.completions.create({
-    model: "gpt-5.4",
-    max_completion_tokens: 4096,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    stream: true,
-  });
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
 
-  for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta?.content;
-    if (delta) {
-      fullContent += delta;
-      onEvent({ type: "agent_output", agentName, content: delta });
+  try {
+    const stream = await openai.chat.completions.create(
+      {
+        model: "gpt-5.4",
+        max_completion_tokens: 4096,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        stream: true,
+      },
+      { signal: controller.signal }
+    );
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) {
+        fullContent += delta;
+        onEvent({ type: "agent_output", agentName, content: delta });
+      }
     }
-  }
 
-  const duration = Date.now() - startTime;
-  onEvent({ type: "agent_done", agentName, content: `${agentName} complete.` });
-  return { content: fullContent, duration };
+    clearTimeout(timeoutHandle);
+    const duration = Date.now() - startTime;
+    onEvent({ type: "agent_done", agentName, content: `${agentName} complete.` });
+    return { content: fullContent, duration };
+  } catch (err) {
+    clearTimeout(timeoutHandle);
+
+    // ── Rate limit (429) ──────────────────────────────────────────────────────
+    const httpStatus = (err as { status?: number })?.status;
+    if (httpStatus === 429) {
+      if (_attempt <= MAX_RATE_LIMIT_RETRIES) {
+        const retryAfterHeader = (err as { headers?: Record<string, string> })?.headers?.["retry-after"];
+        const retryAfterSec = retryAfterHeader ? Math.min(parseInt(retryAfterHeader, 10), 120) : 30;
+        onEvent({ type: "rate_limit", agentName, content: String(retryAfterSec) });
+        await new Promise<void>(resolve => setTimeout(resolve, retryAfterSec * 1000));
+        return runAgent(agentName, systemPrompt, userPrompt, onEvent, _attempt + 1, _timeoutAttempts);
+      }
+      // Exhausted retries — let it bubble as a standard error
+      throw err;
+    }
+
+    // ── Timeout (AbortController fired) ──────────────────────────────────────
+    if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+      if (_timeoutAttempts === 0) {
+        onEvent({
+          type: "timeout",
+          agentName,
+          content: `${agentName} is taking longer than expected. Retrying in 10 seconds...`,
+        });
+        await new Promise<void>(resolve => setTimeout(resolve, 10_000));
+        onEvent({ type: "agent_start", agentName, content: `Retrying ${agentName}...` });
+        return runAgent(agentName, systemPrompt, userPrompt, onEvent, _attempt, 1);
+      }
+      // Second timeout — give up on this agent
+      throw new AgentTimeoutError(agentName);
+    }
+
+    throw err;
+  }
 }
 
 // ─── Validated agent runner ───────────────────────────────────────────────────

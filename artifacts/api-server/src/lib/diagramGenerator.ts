@@ -28,7 +28,7 @@ export function generateMermaidFromDiagram(diagram: DiagramOutput): string {
     const id = safeId(node.id);
     const label = safeLabel(node.label);
     const sc = node.stateChange
-      ? `<br/><small>${safeLabel(node.stateChange, 60)}</small>`
+      ? `<br/>${safeLabel(node.stateChange, 60)}`
       : "";
 
     switch (node.type) {
