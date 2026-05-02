@@ -57,16 +57,32 @@ export function validateJavaScript(code: string): SyntaxValidationResult {
     const err = e as Error & { lineNumber?: number };
     const msg = err.message ?? "JavaScript syntax error";
 
-    // These messages typically indicate TypeScript syntax that vm.Script
-    // cannot parse. Treat them as valid — not a real JS syntax error.
-    const isTypeScriptSyntax =
-      /Unexpected token ':'/.test(msg) ||          // type annotations
-      /Unexpected token '<'/.test(msg) ||          // generics
-      /Unexpected token '?'/.test(msg) ||          // optional chaining edge case
-      msg.includes("Unexpected token 'as'") ||     // as casts
-      (msg.includes("Unexpected identifier") && /:\s*[A-Z]/.test(code));
+    // PRIMARY check: look at the code itself for TypeScript-specific constructs.
+    // vm.Script cannot parse valid TypeScript — if the code is TS, we pass it
+    // through rather than false-positive. This catches all common TS patterns:
+    const codeIsTypeScript =
+      /\binterface\s+\w+/.test(code) ||                        // interface declarations
+      /\benum\s+\w+/.test(code) ||                             // enum declarations
+      /\btype\s+\w+\s*(<[^>]*>)?\s*=/.test(code) ||           // type aliases
+      /\bimplements\s+\w+/.test(code) ||                       // implements clause
+      /\b(private|public|protected|readonly)\s+\w+/.test(code) || // access/readonly modifiers
+      /\w+\s*<[\w\s,|&[\]]+>/.test(code) ||                   // generic type params: Foo<T>, Array<string>
+      /:\s*(string|number|boolean|void|any|never|unknown|null|undefined|object)\b/.test(code) || // primitive type annotations
+      /:\s*[A-Z]\w*(\[\]|<)/.test(code) ||                    // type annotations starting with capital: : MyType, : MyType[], : MyType<
+      /\bas\s+[A-Z]\w*/.test(code) ||                         // as TypeAssertion
+      /\bas\s+(string|number|boolean|unknown|any|never)\b/.test(code) || // as primitive
+      /\w!\s*[.([]/.test(code);                                 // non-null assertion: value!.foo
 
-    if (isTypeScriptSyntax) return { valid: true };
+    if (codeIsTypeScript) return { valid: true };
+
+    // SECONDARY check: error message patterns that also indicate TS syntax.
+    // Belt-and-suspenders for constructs the code regex might miss.
+    const errorImpliesTS =
+      /Unexpected token ':'/.test(msg) ||    // type annotations vm.Script chokes on
+      /Unexpected token '<'/.test(msg) ||    // generics
+      msg.includes("Unexpected token 'as'"); // as casts
+
+    if (errorImpliesTS) return { valid: true };
 
     return {
       valid: false,

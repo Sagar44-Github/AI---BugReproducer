@@ -428,7 +428,13 @@ ${syntaxResult.line ? `Error at line ${syntaxResult.line}: ` : "Error: "}${synta
 FAULTY CODE:
 ${testData.testCode}
 
-Fix ONLY the syntax error. Do not change test logic, assertions, or coverage areas. Return the COMPLETE corrected JSON object.`;
+Fix ONLY the syntax error. Do not change the test logic, assertions, or coverage areas.
+
+CRITICAL OUTPUT RULE: Return the COMPLETE JSON object with ALL schema fields populated.
+Do NOT return only the corrected code as a plain text block.
+The corrected code belongs inside the "testCode" field of the JSON.
+All other fields (framework, language, description, coverageAreas) must be present and unchanged.
+If you return raw code instead of a JSON object, the response will be rejected.`;
 
     const { content: correctedRaw } = await runAgent(
       "Syntax Validator",

@@ -402,6 +402,8 @@ export function AnalysisDetail() {
   const auditTrail: AuditEntry[] = (() => {
     try { return analysis?.auditTrail ? JSON.parse(analysis.auditTrail) : []; } catch { return []; }
   })();
+  // Used by the test-code warning banner to show the specific error that failed
+  const syntaxAuditEntry = auditTrail.find(e => e.agent === "Syntax Validator");
 
   // Correlations
   const [correlations, setCorrelations] = useState<CorrelationMatch[]>([]);
@@ -433,6 +435,7 @@ export function AnalysisDetail() {
   const [annotationStepRef, setAnnotationStepRef] = useState("");
   const [submittingAnnotation, setSubmittingAnnotation] = useState(false);
   const collaborateSSERef = useRef<EventSource | null>(null);
+  const reconnectAttemptsRef = useRef<number>(0);
 
   const loadAnnotations = useCallback(async () => {
     if (!id || annotationsLoaded) return;
@@ -448,21 +451,47 @@ export function AnalysisDetail() {
 
   const connectCollaboration = useCallback(() => {
     if (collaborateSSERef.current) return;
-    const es = new EventSource(`${import.meta.env.BASE_URL}api/analyses/${id}/collaborate`);
-    collaborateSSERef.current = es;
-    es.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.type === "connected") setCollaboratorCount(data.collaboratorCount);
-        if (data.type === "annotation") {
-          setAnnotations(prev => [...prev, data.annotation as Annotation]);
-        }
-      } catch { /* ignore */ }
+
+    const doConnect = () => {
+      if (reconnectAttemptsRef.current >= 5) return; // give up after 5 failed attempts
+
+      const es = new EventSource(`${import.meta.env.BASE_URL}api/analyses/${id}/collaborate`);
+      collaborateSSERef.current = es;
+
+      es.onopen = () => {
+        reconnectAttemptsRef.current = 0; // reset backoff on successful connect
+      };
+
+      es.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data) as Record<string, unknown>;
+          // Both "connected" (initial) and "collaborator_count" (on peer disconnect) carry the count
+          if (data.type === "connected" || data.type === "collaborator_count") {
+            setCollaboratorCount(data.collaboratorCount as number);
+          }
+          if (data.type === "annotation") {
+            setAnnotations(prev => {
+              const ann = data.annotation as Annotation;
+              // Deduplicate by id — prevents double-render when the submitter is also
+              // the SSE listener (POST response + broadcast both arrive)
+              if (prev.some(a => a.id === ann.id)) return prev;
+              return [...prev, ann];
+            });
+          }
+        } catch { /* ignore malformed frames */ }
+      };
+
+      es.onerror = () => {
+        es.close();
+        collaborateSSERef.current = null;
+        // Exponential backoff: 1s → 2s → 4s → 8s → 16s
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+        reconnectAttemptsRef.current++;
+        setTimeout(doConnect, delay);
+      };
     };
-    es.onerror = () => {
-      es.close();
-      collaborateSSERef.current = null;
-    };
+
+    doConnect();
   }, [id]);
 
   useEffect(() => {
@@ -1040,7 +1069,11 @@ export function AnalysisDetail() {
                       <div className="flex items-start gap-2 px-4 py-3 bg-amber-500/5 border-b border-amber-500/20 text-xs text-amber-300">
                         <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                         <span>
-                          Syntax validation failed after one correction attempt. Review this code locally before adding it to CI — it may contain syntax issues.
+                          Syntax validation failed after one correction attempt
+                          {syntaxAuditEntry?.rationale
+                            ? ` — ${syntaxAuditEntry.rationale}`
+                            : ""
+                          }. Review this code locally before adding it to CI.
                         </span>
                       </div>
                     )}

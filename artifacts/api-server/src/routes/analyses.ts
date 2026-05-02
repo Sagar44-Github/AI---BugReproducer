@@ -462,8 +462,12 @@ router.get("/analyses/:id/collaborate", async (req, res): Promise<void> => {
   req.on("close", () => {
     clearInterval(heartbeat);
     collaborationClients.get(id)?.delete(res);
-    if (collaborationClients.get(id)?.size === 0) {
+    const remaining = collaborationClients.get(id);
+    if (!remaining || remaining.size === 0) {
       collaborationClients.delete(id);
+    } else {
+      // Notify remaining clients so their "X online" count stays accurate
+      broadcastToRoom(id, { type: "collaborator_count", collaboratorCount: remaining.size });
     }
   });
 });
