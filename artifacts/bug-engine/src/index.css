@@ -191,6 +191,49 @@
   }
 }
 
+/* ─── Scroll & 3D keyframe animations ─────────────────── */
+@keyframes orb-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(24px, -18px) scale(1.04); }
+  66%       { transform: translate(-16px, 14px) scale(0.97); }
+}
+@keyframes orb-drift-slow {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  40%       { transform: translate(-30px, 20px) scale(1.05); }
+  70%       { transform: translate(18px, -14px) scale(0.96); }
+}
+@keyframes orb-float {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  50%       { transform: translate(-50%, calc(-50% - 18px)) scale(1.03); }
+}
+@keyframes gradient-x {
+  0%, 100% { background-position: 0% 50%; }
+  50%       { background-position: 100% 50%; }
+}
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 20px rgba(6,182,212,0.25); }
+  50%       { box-shadow: 0 0 40px rgba(6,182,212,0.45); }
+}
+@keyframes scan-line {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+.animate-orb-drift      { animation: orb-drift 12s ease-in-out infinite; }
+.animate-orb-drift-slow { animation: orb-drift-slow 18s ease-in-out infinite; }
+.animate-orb-float      { animation: orb-float 8s ease-in-out infinite; }
+.animate-gradient-x     { background-size: 200% 200%; animation: gradient-x 4s ease infinite; }
+.animate-glow-pulse     { animation: glow-pulse 2.5s ease-in-out infinite; }
+
+/* ─── Custom scrollbar ─────────────────────────────────── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--primary) / 0.5); }
+
+/* ─── Perspective wrapper for 3D cards ────────────────── */
+.perspective-1000 { perspective: 1000px; }
+
 @layer utilities {
   input[type="search"]::-webkit-search-cancel-button {
     @apply hidden;
