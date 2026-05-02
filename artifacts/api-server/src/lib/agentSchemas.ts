@@ -1,0 +1,244 @@
+import { z } from "zod";
+
+// ─── Per-agent output schemas ────────────────────────────────────────────────
+
+export const EntityExtractionSchema = z.object({
+  component: z.string().min(1, "component is required"),
+  triggerAction: z.string().min(1, "triggerAction is required"),
+  expectedBehavior: z.string().min(1, "expectedBehavior is required"),
+  actualBehavior: z.string().min(1, "actualBehavior is required"),
+  environment: z.object({
+    os: z.string().optional(),
+    browser: z.string().optional(),
+    runtime: z.string().optional(),
+    version: z.string().optional(),
+    other: z.string().optional(),
+  }),
+  errorMessages: z.array(z.string()),
+  frequency: z.enum(["always", "intermittent", "rare", "unknown"]),
+  additionalContext: z.string().optional(),
+});
+
+export const HypothesisItemSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1, "hypothesis title is required"),
+  mechanism: z.string().min(1, "mechanism explanation is required"),
+  likelihood: z.enum(["high", "medium", "low"]),
+  confirmingEvidence: z.array(z.string()),
+  refutingEvidence: z.array(z.string()),
+  status: z.enum(["retained", "eliminated"]),
+  statusReason: z.string().min(1, "statusReason is required"),
+});
+
+export const HypothesesSchema = z.object({
+  hypotheses: z
+    .array(HypothesisItemSchema)
+    .min(1, "at least one hypothesis is required")
+    .max(5),
+});
+
+export const ReproStepSchema = z.object({
+  number: z.number().int().positive(),
+  action: z.string().min(1, "step action is required"),
+  expectedOutcome: z.string().optional(),
+});
+
+export const StepValidationSchema = z.object({
+  prerequisites: z.array(z.string()),
+  steps: z.array(ReproStepSchema).min(1, "at least one reproduction step is required"),
+  expectedResult: z.string().min(1, "expectedResult is required"),
+  actualResult: z.string().min(1, "actualResult is required"),
+  environmentConfig: z.array(z.string()),
+  validationNotes: z.array(z.string()),
+  confidenceRating: z
+    .number()
+    .int()
+    .min(1)
+    .max(10, "confidenceRating must be 1-10"),
+});
+
+export const TestWriterSchema = z.object({
+  framework: z.string().min(1, "framework is required"),
+  language: z.string().min(1, "language is required"),
+  testCode: z.string().min(10, "testCode must be a non-empty code string"),
+  description: z.string().min(1, "description is required"),
+  coverageAreas: z.array(z.string()).min(1, "at least one coverage area is required"),
+});
+
+export const SynthesizerSchema = z.object({
+  flowDiagram: z.string().min(10, "flowDiagram (mermaid) is required"),
+  clarifyingQuestions: z
+    .array(z.string().min(1))
+    .min(3)
+    .max(5),
+  confidenceScore: z
+    .number()
+    .int()
+    .min(0)
+    .max(100, "confidenceScore must be 0-100"),
+  confidenceEvidence: z.array(z.string()).min(1),
+  confidenceAssumptions: z.array(z.string()),
+  confidenceMissing: z.array(z.string()),
+  severity: z.enum(["critical", "high", "medium", "low"]),
+  severityReason: z.string().min(1, "severityReason is required"),
+});
+
+// ─── Derived TypeScript types ─────────────────────────────────────────────────
+
+export type EntityExtractionOutput = z.infer<typeof EntityExtractionSchema>;
+export type HypothesisItem = z.infer<typeof HypothesisItemSchema>;
+export type HypothesesOutput = z.infer<typeof HypothesesSchema>;
+export type StepValidationOutput = z.infer<typeof StepValidationSchema>;
+export type TestWriterOutput = z.infer<typeof TestWriterSchema>;
+export type SynthesizerOutput = z.infer<typeof SynthesizerSchema>;
+
+// ─── Structured validation error ─────────────────────────────────────────────
+
+export class AgentValidationError extends Error {
+  readonly agent: string;
+  readonly reason: string;
+  readonly rawOutput: string;
+  readonly attempt: number;
+
+  constructor(details: {
+    agent: string;
+    reason: string;
+    rawOutput: string;
+    attempt: number;
+  }) {
+    super(
+      `[${details.agent}] Schema validation failed after ${details.attempt} attempt(s): ${details.reason}`
+    );
+    this.name = "AgentValidationError";
+    this.agent = details.agent;
+    this.reason = details.reason;
+    this.rawOutput = details.rawOutput;
+    this.attempt = details.attempt;
+  }
+
+  toJSON() {
+    return {
+      type: "AgentValidationError",
+      agent: this.agent,
+      reason: this.reason,
+      rawOutput: this.rawOutput.slice(0, 500),
+      attempt: this.attempt,
+    };
+  }
+}
+
+// ─── JSON extraction ──────────────────────────────────────────────────────────
+
+export function stripJsonFences(content: string): string {
+  // Strip ```json ... ``` or ``` ... ``` fences
+  const fenceMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) return fenceMatch[1].trim();
+
+  // Find the outermost JSON object or array
+  const objMatch = content.match(/(\{[\s\S]*\})/);
+  if (objMatch) return objMatch[1];
+  const arrMatch = content.match(/(\[[\s\S]*\])/);
+  if (arrMatch) return arrMatch[1];
+
+  return content.trim();
+}
+
+export function formatZodErrors(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "root";
+      return `missing or invalid field "${path}": ${issue.message}`;
+    })
+    .join("; ");
+}
+
+export function safeParseStructured<T>(
+  schema: z.ZodSchema<T>,
+  raw: string
+): { success: true; data: T } | { success: false; error: z.ZodError; parseError?: string } {
+  const stripped = stripJsonFences(raw);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripped);
+  } catch (e) {
+    const parseError = e instanceof Error ? e.message : "invalid JSON";
+    const dummyError = new z.ZodError([
+      {
+        code: "custom",
+        message: `Response was not valid JSON: ${parseError}`,
+        path: [],
+      },
+    ]);
+    return { success: false, error: dummyError, parseError };
+  }
+
+  const result = schema.safeParse(parsed);
+  if (result.success) return { success: true, data: result.data };
+  return { success: false, error: result.error };
+}
+
+// ─── Schema descriptions for prompts ─────────────────────────────────────────
+
+export const ENTITY_SCHEMA_HINT = `{
+  "component": "string — affected module, component, endpoint, or file",
+  "triggerAction": "string — the exact action or event sequence that causes the bug",
+  "expectedBehavior": "string — what should happen",
+  "actualBehavior": "string — what actually happens (the failure)",
+  "environment": {
+    "os": "optional string",
+    "browser": "optional string",
+    "runtime": "optional string",
+    "version": "optional string",
+    "other": "optional string"
+  },
+  "errorMessages": ["array of error strings, may be empty"],
+  "frequency": "always | intermittent | rare | unknown",
+  "additionalContext": "optional string — any other relevant context"
+}`;
+
+export const HYPOTHESES_SCHEMA_HINT = `{
+  "hypotheses": [
+    {
+      "id": "h1",
+      "title": "string — one-sentence hypothesis",
+      "mechanism": "string — WHY this causes the observed failure",
+      "likelihood": "high | medium | low",
+      "confirmingEvidence": ["strings — evidence that supports this hypothesis"],
+      "refutingEvidence": ["strings — evidence against it, may be empty"],
+      "status": "retained | eliminated",
+      "statusReason": "string — one sentence explaining retained/eliminated decision"
+    }
+  ]
+}`;
+
+export const STEPS_SCHEMA_HINT = `{
+  "prerequisites": ["strings — required setup steps, env vars, seed data"],
+  "steps": [
+    { "number": 1, "action": "string — exact step", "expectedOutcome": "optional string" }
+  ],
+  "expectedResult": "string — what should happen",
+  "actualResult": "string — what happens instead (the bug)",
+  "environmentConfig": ["strings — specific env var or config requirements"],
+  "validationNotes": ["strings — notes on ruling out other hypotheses"],
+  "confidenceRating": 8
+}`;
+
+export const TEST_SCHEMA_HINT = `{
+  "framework": "string — e.g. Jest, Pytest, Cypress",
+  "language": "string — e.g. TypeScript, Python",
+  "testCode": "string — the complete, runnable test code",
+  "description": "string — what the test does and validates",
+  "coverageAreas": ["string — areas covered, e.g. 'main reproduction', 'edge case', 'regression guard'"]
+}`;
+
+export const SYNTHESIZER_SCHEMA_HINT = `{
+  "flowDiagram": "string — Mermaid flowchart source code only, no fences",
+  "clarifyingQuestions": ["string", "string", "string", "string", "string"],
+  "confidenceScore": 85,
+  "confidenceEvidence": ["string — each piece of supporting evidence"],
+  "confidenceAssumptions": ["string — each assumption made"],
+  "confidenceMissing": ["string — each piece of missing info"],
+  "severity": "critical | high | medium | low",
+  "severityReason": "string — one sentence explaining severity"
+}`;

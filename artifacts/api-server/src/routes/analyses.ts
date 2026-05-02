@@ -9,6 +9,7 @@ import {
   UpdateAnalysisBody,
 } from "@workspace/api-zod";
 import { runBugReproductionPipeline, runCorrelation, type AgentEvent } from "../lib/agents";
+import { AgentValidationError } from "../lib/agentSchemas";
 import { logger } from "../lib/logger";
 import type { Response } from "express";
 
@@ -538,7 +539,23 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
       .set({ status: "failed", updatedAt: new Date() })
       .where(eq(analysesTable.id, params.data.id));
 
-    sendEvent({ type: "error", agentName: "System", content: "An error occurred during the pipeline." });
+    if (err instanceof AgentValidationError) {
+      sendEvent({
+        type: "error",
+        agentName: err.agent,
+        content: JSON.stringify({
+          agent: err.agent,
+          reason: err.reason,
+          rawOutput: err.rawOutput.slice(0, 300),
+        }),
+      });
+    } else {
+      sendEvent({
+        type: "error",
+        agentName: "System",
+        content: "An unexpected error occurred during the pipeline.",
+      });
+    }
   }
 
   res.end();

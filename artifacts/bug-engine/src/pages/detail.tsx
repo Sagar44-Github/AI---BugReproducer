@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useRoute, Link, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -35,7 +35,14 @@ import {
 } from "@/components/ui/alert-dialog";
 
 type AgentEvent = {
-  type: "agent_start" | "agent_output" | "agent_done" | "pipeline_done" | "error";
+  type:
+    | "agent_start"
+    | "agent_output"
+    | "agent_done"
+    | "agent_validated"
+    | "agent_retry"
+    | "pipeline_done"
+    | "error";
   agentName: string;
   content: string;
 };
@@ -44,6 +51,9 @@ type AgentState = {
   name: string;
   status: "pending" | "running" | "completed" | "error";
   output: string;
+  validated?: boolean;
+  retried?: boolean;
+  validationError?: string;
 };
 
 type ConfidenceBreakdown = {
@@ -79,6 +89,266 @@ type Annotation = {
   content: string;
   createdAt: string;
 };
+
+// ─── Structured tab renderers ─────────────────────────────────────────────────
+// Each component tries to parse the stored JSON from the new validated pipeline.
+// If the field is legacy markdown text, it falls back gracefully to raw rendering.
+
+type HypothesisItem = {
+  id: string;
+  title: string;
+  mechanism: string;
+  likelihood: "high" | "medium" | "low";
+  confirmingEvidence: string[];
+  refutingEvidence: string[];
+  status: "retained" | "eliminated";
+  statusReason: string;
+};
+
+function StructuredHypotheses({ raw }: { raw: string }) {
+  const hypotheses = useMemo<HypothesisItem[] | null>(() => {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as HypothesisItem[]) : null;
+    } catch { return null; }
+  }, [raw]);
+
+  if (!hypotheses) {
+    return <div className="whitespace-pre-wrap text-muted-foreground text-sm">{raw}</div>;
+  }
+
+  const likelihoodStyle: Record<string, string> = {
+    high: "bg-red-500/20 text-red-400 border-red-500/30",
+    medium: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+    low: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+  };
+
+  return (
+    <div className="space-y-4">
+      {hypotheses.map((h, i) => (
+        <div
+          key={i}
+          className={`rounded-lg border p-4 space-y-3 transition-opacity ${
+            h.status === "retained"
+              ? "border-primary/30 bg-primary/5"
+              : "border-border/50 bg-muted/20 opacity-60"
+          }`}
+        >
+          <div className="flex items-start gap-3 justify-between flex-wrap">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs font-mono text-muted-foreground shrink-0">{h.id}</span>
+              <span className="font-semibold text-sm">{h.title}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Badge
+                variant="outline"
+                className={`text-xs ${likelihoodStyle[h.likelihood] ?? ""}`}
+              >
+                {h.likelihood}
+              </Badge>
+              <Badge
+                variant="outline"
+                className={`text-xs font-mono ${
+                  h.status === "retained"
+                    ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+                    : "bg-red-500/20 text-red-400 border-red-500/30"
+                }`}
+              >
+                {h.status}
+              </Badge>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground">{h.mechanism}</p>
+          {h.confirmingEvidence.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {h.confirmingEvidence.map((e, ei) => (
+                <span
+                  key={ei}
+                  className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded px-2 py-0.5"
+                >
+                  + {e}
+                </span>
+              ))}
+            </div>
+          )}
+          {h.refutingEvidence.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {h.refutingEvidence.map((e, ei) => (
+                <span
+                  key={ei}
+                  className="text-xs bg-red-500/10 text-red-400 border border-red-500/20 rounded px-2 py-0.5"
+                >
+                  − {e}
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground border-t border-border/30 pt-2">
+            {h.statusReason}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type ReproStep = { number: number; action: string; expectedOutcome?: string };
+type StepData = {
+  prerequisites: string[];
+  steps: ReproStep[];
+  expectedResult: string;
+  actualResult: string;
+  environmentConfig?: string[];
+  validationNotes?: string[];
+  confidenceRating: number;
+};
+
+function StructuredReproSteps({ raw }: { raw: string }) {
+  const data = useMemo<StepData | null>(() => {
+    try {
+      const parsed = JSON.parse(raw) as StepData;
+      return parsed.steps && Array.isArray(parsed.steps) ? parsed : null;
+    } catch { return null; }
+  }, [raw]);
+
+  if (!data) {
+    return (
+      <div className="bg-[#0a0a0a] rounded-lg p-6 font-mono text-sm whitespace-pre-wrap text-gray-300">
+        {raw}
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      {data.prerequisites.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Prerequisites
+          </h3>
+          <ul className="space-y-1.5">
+            {data.prerequisites.map((p, i) => (
+              <li key={i} className="flex gap-2 text-sm">
+                <span className="text-primary shrink-0">•</span>
+                <span className="text-muted-foreground">{p}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Reproduction Steps
+        </h3>
+        <div className="space-y-3">
+          {data.steps.map((step) => (
+            <div key={step.number} className="flex gap-3">
+              <div className="w-6 h-6 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center text-xs font-bold text-primary shrink-0 mt-0.5">
+                {step.number}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-foreground">{step.action}</p>
+                {step.expectedOutcome && (
+                  <p className="text-xs text-muted-foreground mt-0.5 italic">
+                    Expected: {step.expectedOutcome}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-3">
+          <p className="text-xs font-semibold text-emerald-400 mb-1 uppercase tracking-wide">Expected Result</p>
+          <p className="text-sm text-muted-foreground">{data.expectedResult}</p>
+        </div>
+        <div className="rounded border border-red-500/30 bg-red-500/5 p-3">
+          <p className="text-xs font-semibold text-red-400 mb-1 uppercase tracking-wide">Actual Result</p>
+          <p className="text-sm text-muted-foreground">{data.actualResult}</p>
+        </div>
+      </div>
+
+      {data.environmentConfig && data.environmentConfig.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Environment Config
+          </h3>
+          <ul className="space-y-1">
+            {data.environmentConfig.map((e, i) => (
+              <li key={i} className="text-xs font-mono text-cyan-400 bg-cyan-500/5 border border-cyan-500/20 rounded px-2 py-1">
+                {e}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {data.validationNotes && data.validationNotes.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Validation Notes
+          </h3>
+          <ul className="space-y-1.5">
+            {data.validationNotes.map((n, i) => (
+              <li key={i} className="flex gap-2 text-xs text-muted-foreground">
+                <span className="text-amber-400 shrink-0">→</span>{n}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 text-sm border-t border-border/50 pt-3">
+        <span className="text-muted-foreground text-xs">Reproduction Confidence:</span>
+        <span className="font-bold text-primary font-mono">{data.confidenceRating}/10</span>
+        <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+          <div
+            className="h-full bg-primary rounded-full transition-all"
+            style={{ width: `${data.confidenceRating * 10}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StructuredQuestions({ raw }: { raw: string }) {
+  const questions = useMemo<string[] | null>(() => {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as string[]) : null;
+    } catch { return null; }
+  }, [raw]);
+
+  if (!questions) {
+    return (
+      <div className="bg-muted/20 rounded-lg border border-border/50 p-5 font-mono text-sm whitespace-pre-wrap text-muted-foreground leading-relaxed">
+        {raw}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {questions.map((q, i) => (
+        <div
+          key={i}
+          className="flex gap-3 p-3 rounded border border-border/50 bg-muted/20 hover:bg-muted/30 transition-colors"
+        >
+          <span className="w-6 h-6 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center text-xs font-bold text-primary shrink-0 mt-0.5">
+            {i + 1}
+          </span>
+          <p className="text-sm text-muted-foreground">{q}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 const SEVERITY_CONFIG = {
   critical: { label: "Critical", color: "text-red-400", bg: "bg-red-500/10 border-red-500/30", Icon: ShieldAlert },
@@ -266,13 +536,36 @@ export function AnalysisDetail() {
                 break;
               }
 
-              if (event.agentName) {
+              if (event.type === "agent_validated") {
+                const canonical = event.agentName.replace(/ \[correction\]$/, "");
                 setAgents(prev => {
-                  const cur = prev[event.agentName] || { name: event.agentName, status: "pending" as const, output: "" };
+                  const key = Object.keys(prev).find(k => k === canonical || k === event.agentName) ?? canonical;
+                  if (!prev[key]) return prev;
+                  return { ...prev, [key]: { ...prev[key], validated: true } };
+                });
+                continue;
+              }
+
+              if (event.type === "agent_retry") {
+                const canonical = event.agentName.replace(/ \[correction\]$/, "");
+                setAgents(prev => {
+                  const key = Object.keys(prev).find(k => k === canonical || k === event.agentName) ?? canonical;
+                  if (!prev[key]) return prev;
+                  return { ...prev, [key]: { ...prev[key], retried: true, validationError: event.content } };
+                });
+                continue;
+              }
+
+              if (event.agentName) {
+                const canonical = event.agentName.replace(/ \[correction\]$/, "");
+                setAgents(prev => {
+                  const key = Object.keys(prev).find(k => k === canonical) ?? canonical;
+                  const cur = prev[key] || { name: canonical, status: "pending" as const, output: "" };
                   return {
                     ...prev,
-                    [event.agentName]: {
+                    [key]: {
                       ...cur,
+                      name: canonical,
                       status: event.type === "agent_start" ? "running"
                         : event.type === "agent_done" ? "completed"
                         : event.type === "error" ? "error"
@@ -510,13 +803,29 @@ export function AnalysisDetail() {
                       <div className="flex items-center gap-2 font-mono text-sm font-semibold">
                         <Code2 className="w-4 h-4 text-primary" />{agent.name}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap justify-end">
+                        {agent.retried && (
+                          <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-400 border-amber-500/30 font-mono">
+                            <RefreshCw className="w-3 h-3 mr-1" />retried
+                          </Badge>
+                        )}
+                        {agent.validated && (
+                          <Badge variant="outline" className="text-xs bg-emerald-500/10 text-emerald-400 border-emerald-500/30 font-mono">
+                            <CheckCircle2 className="w-3 h-3 mr-1" />schema ✓
+                          </Badge>
+                        )}
                         {agent.status === "running" && <Loader2 className="w-4 h-4 text-primary animate-spin" />}
-                        {agent.status === "completed" && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                        {agent.status === "completed" && !agent.validated && <CheckCircle2 className="w-4 h-4 text-green-500" />}
                         {agent.status === "error" && <AlertCircle className="w-4 h-4 text-destructive" />}
                         <span className="text-xs uppercase tracking-wider text-muted-foreground font-mono">{agent.status}</span>
                       </div>
                     </div>
+                    {agent.retried && agent.validationError && (
+                      <div className="bg-amber-500/5 border-b border-amber-500/20 px-4 py-2 flex items-start gap-2">
+                        <RefreshCw className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                        <span className="text-xs text-amber-400 font-mono">Validation failed — retrying with correction: {agent.validationError.slice(0, 120)}{agent.validationError.length > 120 ? "…" : ""}</span>
+                      </div>
+                    )}
                     {agent.output && (
                       <div className="bg-[#0a0a0a] p-4 text-xs font-mono text-gray-300 whitespace-pre-wrap max-h-[300px] overflow-y-auto">
                         {agent.output}
@@ -531,9 +840,33 @@ export function AnalysisDetail() {
             {pipelineError && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                 <Card className="border-destructive/50 bg-destructive/10">
-                  <CardContent className="p-4 flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
-                    <div className="text-sm font-mono text-destructive-foreground whitespace-pre-wrap">{pipelineError}</div>
+                  <CardContent className="p-4 space-y-2">
+                    {(() => {
+                      try {
+                        const parsed = JSON.parse(pipelineError) as { agent: string; reason: string; rawOutput?: string };
+                        return (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <AlertCircle className="w-5 h-5 text-destructive shrink-0" />
+                              <span className="font-semibold text-sm text-destructive-foreground">Agent Validation Failed: {parsed.agent}</span>
+                            </div>
+                            <p className="text-xs font-mono text-destructive-foreground/80 ml-7">{parsed.reason}</p>
+                            {parsed.rawOutput && (
+                              <div className="ml-7 bg-black/30 rounded p-2 text-xs font-mono text-gray-400 max-h-24 overflow-y-auto whitespace-pre-wrap">
+                                {parsed.rawOutput}
+                              </div>
+                            )}
+                          </>
+                        );
+                      } catch {
+                        return (
+                          <div className="flex items-start gap-3">
+                            <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                            <div className="text-sm font-mono text-destructive-foreground whitespace-pre-wrap">{pipelineError}</div>
+                          </div>
+                        );
+                      }
+                    })()}
                   </CardContent>
                 </Card>
               </motion.div>
@@ -568,9 +901,9 @@ export function AnalysisDetail() {
               <TabsContent value="steps" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
                   <CardContent className="p-0">
-                    <div className="bg-[#0a0a0a] rounded-lg p-6 font-mono text-sm whitespace-pre-wrap text-gray-300">
-                      {analysis.reproductionSteps || "No reproduction steps generated."}
-                    </div>
+                    {analysis.reproductionSteps
+                      ? <StructuredReproSteps raw={analysis.reproductionSteps} />
+                      : <div className="p-6 text-sm text-muted-foreground text-center">No reproduction steps generated.</div>}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -588,9 +921,9 @@ export function AnalysisDetail() {
               <TabsContent value="hypotheses" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
                   <CardContent className="p-6">
-                    <div className="whitespace-pre-wrap text-muted-foreground text-sm">
-                      {analysis.hypotheses || "No hypotheses generated."}
-                    </div>
+                    {analysis.hypotheses
+                      ? <StructuredHypotheses raw={analysis.hypotheses} />
+                      : <p className="text-sm text-muted-foreground text-center py-8">No hypotheses generated.</p>}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -624,9 +957,7 @@ export function AnalysisDetail() {
                     {analysis.clarifyingQuestions ? (
                       <div className="space-y-3">
                         <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Targeted Clarifying Questions</p>
-                        <div className="bg-muted/20 rounded-lg border border-border/50 p-5 font-mono text-sm whitespace-pre-wrap text-muted-foreground leading-relaxed">
-                          {analysis.clarifyingQuestions}
-                        </div>
+                        <StructuredQuestions raw={analysis.clarifyingQuestions} />
                       </div>
                     ) : (
                       <p className="text-sm text-muted-foreground text-center py-8">No clarifying questions needed.</p>

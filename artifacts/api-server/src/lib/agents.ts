@@ -1,8 +1,38 @@
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { logger } from "./logger";
+import {
+  EntityExtractionSchema,
+  HypothesesSchema,
+  StepValidationSchema,
+  TestWriterSchema,
+  SynthesizerSchema,
+  AgentValidationError,
+  safeParseStructured,
+  formatZodErrors,
+  ENTITY_SCHEMA_HINT,
+  HYPOTHESES_SCHEMA_HINT,
+  STEPS_SCHEMA_HINT,
+  TEST_SCHEMA_HINT,
+  SYNTHESIZER_SCHEMA_HINT,
+  type EntityExtractionOutput,
+  type HypothesesOutput,
+  type StepValidationOutput,
+  type TestWriterOutput,
+  type SynthesizerOutput,
+} from "./agentSchemas";
+import type { ZodSchema } from "zod";
+
+// ─── Public types ─────────────────────────────────────────────────────────────
 
 export type AgentEvent = {
-  type: "agent_start" | "agent_output" | "agent_done" | "pipeline_done" | "error";
+  type:
+    | "agent_start"
+    | "agent_output"
+    | "agent_done"
+    | "agent_validated"
+    | "agent_retry"
+    | "pipeline_done"
+    | "error";
   agentName: string;
   content: string;
 };
@@ -36,6 +66,8 @@ export type PipelineResult = {
   auditTrail: AuditEntry[];
 };
 
+// ─── Source-type metadata ─────────────────────────────────────────────────────
+
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   raw_text: "raw bug report",
   github_url: "GitHub issue",
@@ -48,15 +80,24 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
 };
 
 const SOURCE_TYPE_HINTS: Record<string, string> = {
-  stack_trace: "Pay special attention to: the error type, the exact line numbers, the call chain from top to bottom, and any chained causes. Trace the execution path carefully.",
-  github_url: "This is a GitHub issue — extract the title, description, steps to reproduce if listed, labels, and any key comments that add context.",
-  jira_ticket: "This is a Jira ticket — extract the issue type, priority, environment fields, acceptance criteria, and any linked issues or comments.",
-  sentry_event: "This is a Sentry error event — focus on: exception type/message, the stack trace, breadcrumbs, device/browser context, release version, and any tags.",
-  log_file: "This is a log file — identify: the error pattern, timestamps around the failure, repeated error sequences, and the sequence of events leading up to the failure.",
-  curl_request: "This is a failed API/curl request — note: the endpoint, HTTP method, headers, request body, response status code, response body, and any authentication indicators.",
-  video_description: "This is a description of a recorded bug — focus on: the visual sequence of actions, the exact moment of failure, UI state changes, and any error messages visible.",
+  stack_trace:
+    "Pay special attention to: the error type, the exact line numbers, the call chain from top to bottom, and any chained causes. Trace the execution path carefully.",
+  github_url:
+    "This is a GitHub issue — extract the title, description, steps to reproduce if listed, labels, and any key comments that add context.",
+  jira_ticket:
+    "This is a Jira ticket — extract the issue type, priority, environment fields, acceptance criteria, and any linked issues or comments.",
+  sentry_event:
+    "This is a Sentry error event — focus on: exception type/message, the stack trace, breadcrumbs, device/browser context, release version, and any tags.",
+  log_file:
+    "This is a log file — identify: the error pattern, timestamps around the failure, repeated error sequences, and the sequence of events leading up to the failure.",
+  curl_request:
+    "This is a failed API/curl request — note: the endpoint, HTTP method, headers, request body, response status code, response body, and any authentication indicators.",
+  video_description:
+    "This is a description of a recorded bug — focus on: the visual sequence of actions, the exact moment of failure, UI state changes, and any error messages visible.",
   raw_text: "",
 };
+
+// ─── Low-level agent runner (single LLM call, streaming) ─────────────────────
 
 async function runAgent(
   agentName: string,
@@ -92,6 +133,75 @@ async function runAgent(
   return { content: fullContent, duration };
 }
 
+// ─── Validated agent runner ───────────────────────────────────────────────────
+//
+// Wraps runAgent with Zod schema enforcement:
+//   1. Call runAgent → parse + validate output
+//   2. On failure: emit agent_retry, call runAgent again with an error-correction prompt
+//   3. On second failure: throw AgentValidationError({ agent, reason, rawOutput })
+//   4. On success (either attempt): emit agent_validated
+//
+// Downstream agents NEVER start if this function throws.
+
+async function runValidatedAgent<T>(
+  agentName: string,
+  schema: ZodSchema<T>,
+  systemPrompt: string,
+  userPrompt: string,
+  onEvent: (event: AgentEvent) => void
+): Promise<T> {
+  // ── Attempt 1 ────────────────────────────────────────────────────────────
+  const { content: raw1 } = await runAgent(agentName, systemPrompt, userPrompt, onEvent);
+
+  const result1 = safeParseStructured(schema, raw1);
+  if (result1.success) {
+    onEvent({ type: "agent_validated", agentName, content: "" });
+    return result1.data;
+  }
+
+  // ── Validation failed — build correction prompt and retry once ────────────
+  const errorDesc = formatZodErrors(result1.error);
+  onEvent({ type: "agent_retry", agentName, content: errorDesc });
+
+  const correctionPrompt = `Your previous response failed JSON schema validation.
+
+VALIDATION ERRORS (fix ALL of them):
+${errorDesc}
+
+YOUR PREVIOUS OUTPUT (first 800 chars):
+${raw1.slice(0, 800)}
+
+INSTRUCTIONS:
+- Respond ONLY with a valid JSON object or array
+- Do NOT wrap in markdown code fences
+- Do NOT add any explanation before or after the JSON
+- Every required field listed in the original schema must be present and correctly typed`;
+
+  // ── Attempt 2 ────────────────────────────────────────────────────────────
+  const { content: raw2 } = await runAgent(
+    `${agentName} [correction]`,
+    systemPrompt,
+    correctionPrompt,
+    onEvent
+  );
+
+  const result2 = safeParseStructured(schema, raw2);
+  if (result2.success) {
+    onEvent({ type: "agent_validated", agentName, content: "corrected" });
+    return result2.data;
+  }
+
+  // ── Both attempts failed — structured error, no downstream execution ──────
+  throw new AgentValidationError({
+    agent: agentName,
+    reason: formatZodErrors(result2.error),
+    rawOutput: raw2,
+    attempt: 2,
+  });
+}
+
+// ─── Main pipeline ────────────────────────────────────────────────────────────
+
 export async function runBugReproductionPipeline(
   rawInput: string,
   inputType: string,
@@ -100,27 +210,31 @@ export async function runBugReproductionPipeline(
 ): Promise<PipelineResult> {
   const sourceLabel = SOURCE_TYPE_LABELS[inputType] ?? "bug report";
   const sourceHint = SOURCE_TYPE_HINTS[inputType] ?? "";
-  const context = codeContext ? `\n\nRelevant code context:\n\`\`\`\n${codeContext}\n\`\`\`` : "";
+  const context = codeContext
+    ? `\n\nRelevant code context:\n\`\`\`\n${codeContext}\n\`\`\``
+    : "";
   const auditTrail: AuditEntry[] = [];
 
-  // Stage 1: Entity Extraction Agent
-  const { content: extractedEntities } = await runAgent(
+  // ── Agent 1: Entity Extraction ────────────────────────────────────────────
+  const entityData: EntityExtractionOutput = await runValidatedAgent(
     "Entity Extraction Agent",
+    EntityExtractionSchema,
     `You are an expert bug analysis AI specializing in ${sourceLabel} analysis.
-Extract structured information from the provided ${sourceLabel}.
 ${sourceHint}
 
-Identify and extract:
-- The affected component, system, module, file, or endpoint
-- The triggering action or sequence of events
-- The expected behavior
-- The observed/actual failure behavior
-- Environment details (OS, browser, version, runtime, etc.)
-- Any error messages, codes, or exceptions
-- Relevant data, state conditions, or user context
-- Severity indicators (if present)
+Extract structured bug information from the provided ${sourceLabel}.
 
-Format your output as a clear, structured list with bold headers. Be concise and precise. Do not add fluff.`,
+CRITICAL: Respond ONLY with a valid JSON object. No markdown. No explanation. No code fences.
+Use this exact schema (all required fields must be present):
+${ENTITY_SCHEMA_HINT}
+
+Rules:
+- component: the specific module, endpoint, class, or file affected
+- triggerAction: the exact action or sequence of events that triggers the bug
+- expectedBehavior: what should happen according to the spec or user expectation
+- actualBehavior: what actually happens (the failure, error, or wrong outcome)
+- frequency: choose one of "always", "intermittent", "rare", or "unknown"
+- errorMessages: include verbatim error text if present, otherwise empty array []`,
     `${sourceLabel.charAt(0).toUpperCase() + sourceLabel.slice(1)} content:\n${rawInput}${context}`,
     onEvent
   );
@@ -129,104 +243,102 @@ Format your output as a clear, structured list with bold headers. Be concise and
     timestamp: new Date().toISOString(),
     agent: "Entity Extraction Agent",
     action: "extracted_entities",
-    decision: "Parsed bug report into structured entities: component, trigger, expected vs actual, environment, errors",
-    rationale: `Processed ${sourceLabel} input to identify all key debugging signals before hypothesis generation.`,
+    decision: `Extracted entities: component="${entityData.component}", trigger="${entityData.triggerAction}", frequency=${entityData.frequency}, ${entityData.errorMessages.length} error message(s)`,
+    rationale: `Processed ${sourceLabel} to identify all key debugging signals. Entity schema validated before passing to Hypothesis Generator.`,
   });
 
-  // Stage 2: Hypothesis Generator
-  const { content: hypotheses } = await runAgent(
+  // ── Agent 2: Hypothesis Generator ────────────────────────────────────────
+  //    Receives validated EntityExtractionOutput — never runs on unvalidated entity data
+
+  const hypothesesData: HypothesesOutput = await runValidatedAgent(
     "Hypothesis Generator",
-    `You are an expert debugging AI. Given structured bug information extracted from a ${sourceLabel}, generate multiple hypotheses about the root cause.
+    HypothesesSchema,
+    `You are an expert debugging AI. Given structured bug entities extracted from a ${sourceLabel}, generate 3-5 hypotheses about the root cause.
 
-For each hypothesis:
-1. State the hypothesis clearly in one sentence
-2. Explain the mechanism — WHY this could cause the observed behavior
-3. Rate likelihood: **High** / **Medium** / **Low** with a brief reason
-4. Identify what evidence would confirm or refute it
-5. State whether this hypothesis was RETAINED or ELIMINATED based on available evidence, and why.
+CRITICAL: Respond ONLY with a valid JSON object. No markdown. No explanation. No code fences.
+Use this exact schema:
+${HYPOTHESES_SCHEMA_HINT}
 
-Generate 3-5 distinct hypotheses ordered by likelihood. Consider: race conditions, state management issues, environment-specific factors, edge cases in data handling, version mismatches, network/async timing, and configuration errors.`,
-    `Extracted bug information:\n${extractedEntities}`,
+Rules:
+- Generate 3-5 distinct hypotheses, ordered by likelihood descending
+- For each hypothesis: assess likelihood (high/medium/low), list evidence for and against
+- Mark status as "retained" or "eliminated" based on available evidence
+- Consider: race conditions, state management, env mismatches, version conflicts, async timing, config errors`,
+    `Validated bug entities:\n${JSON.stringify(entityData, null, 2)}`,
     onEvent
   );
 
-  // Count retained vs eliminated
-  const eliminatedCount = (hypotheses.match(/ELIMINATED/gi) || []).length;
-  const retainedCount = (hypotheses.match(/RETAINED/gi) || []).length;
+  const retained = hypothesesData.hypotheses.filter((h) => h.status === "retained").length;
+  const eliminated = hypothesesData.hypotheses.filter((h) => h.status === "eliminated").length;
 
   auditTrail.push({
     timestamp: new Date().toISOString(),
     agent: "Hypothesis Generator",
     action: "generated_hypotheses",
-    decision: `Generated ${retainedCount + eliminatedCount} hypotheses; ${retainedCount} retained, ${eliminatedCount} eliminated based on evidence`,
-    rationale: "Ranked by likelihood using entity signals. Eliminated hypotheses contradicted by available stack data or environment info.",
+    decision: `Generated ${hypothesesData.hypotheses.length} hypotheses: ${retained} retained, ${eliminated} eliminated. Top hypothesis: "${hypothesesData.hypotheses[0]?.title}" (${hypothesesData.hypotheses[0]?.likelihood} likelihood)`,
+    rationale:
+      "Hypotheses ranked by likelihood using entity signals. Eliminated hypotheses contradicted by available evidence from the bug entities.",
   });
 
-  // Stage 3: Step Validator / Reproduction Steps
-  const { content: reproductionSteps } = await runAgent(
+  // ── Agent 3: Step Validator ───────────────────────────────────────────────
+  //    Receives validated EntityExtractionOutput + HypothesesOutput
+
+  const stepData: StepValidationOutput = await runValidatedAgent(
     "Step Validator",
-    `You are an expert QA engineer. Given bug information and hypotheses, create precise, actionable reproduction steps that a developer could follow in under 5 minutes.
+    StepValidationSchema,
+    `You are an expert QA engineer. Given validated bug entities and hypotheses, create precise reproduction steps a developer can follow in under 5 minutes.
 
-Format exactly as:
+CRITICAL: Respond ONLY with a valid JSON object. No markdown. No explanation. No code fences.
+Use this exact schema:
+${STEPS_SCHEMA_HINT}
 
-**Prerequisites:**
-- List setup conditions, required versions, env vars, seed data
-
-**Reproduction Steps:**
-1. Numbered, precise steps with exact values/inputs where possible
-
-**Expected Result:**
-One clear sentence of what should happen
-
-**Actual Result:**
-One clear sentence of what happens instead
-
-**Environment Variables / Config:**
-Any specific settings that must be set
-
-**Validation Notes:**
-- Steps to rule out each hypothesis
-- Alternative reproduction paths
-- Edge cases worth testing
-
-**Confidence Assessment:**
-Rate confidence this reproduces the bug: X/10 — brief explanation.`,
-    `Original ${SOURCE_TYPE_LABELS[inputType] ?? "report"}:\n${rawInput}\n\nExtracted entities:\n${extractedEntities}\n\nHypotheses:\n${hypotheses}`,
+Rules:
+- steps: numbered, precise steps with exact values/inputs where possible
+- expectedResult: one sentence of what should happen
+- actualResult: one sentence of what happens instead (the bug)
+- confidenceRating: integer 1-10 reflecting confidence that these steps reproduce the bug
+- validationNotes: notes on how to rule out each retained hypothesis`,
+    `Original ${sourceLabel}:\n${rawInput}\n\nValidated entities:\n${JSON.stringify(
+      entityData,
+      null,
+      2
+    )}\n\nValidated hypotheses:\n${JSON.stringify(hypothesesData.hypotheses, null, 2)}${context}`,
     onEvent
   );
-
-  const stepConfidenceMatch = reproductionSteps.match(/(\d+)\/10/);
-  const stepConfidence = stepConfidenceMatch ? parseInt(stepConfidenceMatch[1], 10) : 7;
 
   auditTrail.push({
     timestamp: new Date().toISOString(),
     agent: "Step Validator",
     action: "validated_steps",
-    decision: `Reproduction steps validated with ${stepConfidence}/10 confidence. Steps account for all retained hypotheses.`,
-    rationale: "Steps derived from highest-likelihood hypothesis. Validation notes cover alternative paths to rule out other candidates.",
+    decision: `Generated ${stepData.steps.length} reproduction steps with ${stepData.confidenceRating}/10 confidence. ${stepData.prerequisites.length} prerequisite(s), ${stepData.validationNotes.length} validation note(s).`,
+    rationale:
+      "Steps derived from highest-likelihood hypothesis. Validation notes cover alternative paths to rule out remaining hypotheses.",
   });
 
-  // Stage 4: Test Writer
-  const { content: testCode } = await runAgent(
+  // ── Agent 4: Test Writer ──────────────────────────────────────────────────
+  //    Receives validated EntityExtractionOutput + StepValidationOutput
+
+  const testData: TestWriterOutput = await runValidatedAgent(
     "Test Writer",
-    `You are a senior software engineer. Generate complete, executable test code to reproduce and verify the bug.
+    TestWriterSchema,
+    `You are a senior software engineer. Generate complete, executable test code to reproduce and verify the described bug.
 
-Based on the context, choose the most appropriate test type:
-- Unit test (isolated function/method)
-- Integration test (component + dependencies)
-- API test (HTTP endpoints)
-- E2E test (user flows)
+CRITICAL: Respond ONLY with a valid JSON object. No markdown. No explanation. No code fences.
+Use this exact schema:
+${TEST_SCHEMA_HINT}
 
-Requirements:
-- Add a top comment block: // Bug Reproduction Test — [brief one-line description]
-- Use descriptive test names explaining what is being tested and what should happen
-- Include setup/teardown if needed
-- Write assertions that would FAIL with the bug and PASS when fixed
-- Add inline comments explaining what each section validates
-- Cover: main bug reproduction, one edge case, one regression check
-
-Default to Jest + TypeScript unless another framework is clearly implied by the context.`,
-    `Bug input:\n${rawInput}\n\nExtracted entities:\n${extractedEntities}\n\nReproduction steps:\n${reproductionSteps}${context}`,
+Rules:
+- testCode: the COMPLETE, runnable test — no placeholders, no pseudocode
+- Add a top comment: // Bug Reproduction Test — [one-line description]
+- Assertions must FAIL with the bug present and PASS once it is fixed
+- Cover: main reproduction case, one edge case, one regression guard
+- Default to Jest + TypeScript unless another framework is clearly implied
+- framework and language must be explicit strings (e.g. "Jest", "TypeScript")`,
+    `Original ${sourceLabel}:\n${rawInput}\n\nValidated entities:\n${JSON.stringify(
+      entityData,
+      null,
+      2
+    )}\n\nValidated reproduction steps:\n${JSON.stringify(stepData, null, 2)}${context}`,
     onEvent
   );
 
@@ -234,119 +346,78 @@ Default to Jest + TypeScript unless another framework is clearly implied by the 
     timestamp: new Date().toISOString(),
     agent: "Test Writer",
     action: "generated_tests",
-    decision: "Generated test suite covering: main reproduction case, edge case, and regression guard",
-    rationale: "Test assertions are designed to fail with the bug present and pass once the root cause is fixed.",
+    decision: `Generated ${testData.framework} (${testData.language}) test covering ${testData.coverageAreas.length} area(s): ${testData.coverageAreas.join(", ")}`,
+    rationale:
+      "Test assertions designed to fail with the bug present and pass when the root cause is fixed. Coverage aligns with highest-likelihood hypothesis.",
   });
 
-  // Stage 5: Analysis Synthesizer — flow diagram + clarifying questions + confidence
-  const { content: analysisOutput } = await runAgent(
+  // ── Agent 5: Analysis Synthesizer ─────────────────────────────────────────
+  //    Receives all four prior validated outputs
+
+  const synthData: SynthesizerOutput = await runValidatedAgent(
     "Analysis Synthesizer",
-    `You are a debugging expert and technical writer. Synthesize the full bug analysis into four sections:
+    SynthesizerSchema,
+    `You are a debugging expert and technical writer. Synthesize the full bug analysis into a structured JSON report.
 
-## 1. Flow Diagram (Mermaid)
+CRITICAL: Respond ONLY with a valid JSON object. No markdown. No explanation. No code fences.
+Use this exact schema:
+${SYNTHESIZER_SCHEMA_HINT}
 
-Generate a Mermaid flowchart showing the sequence of events that leads to the bug. Include:
-- Normal happy path in green
-- The divergence point where the bug occurs
-- The failure state
+Rules:
+- flowDiagram: Mermaid flowchart source ONLY — no fences, no backticks, starts with "flowchart TD" or similar
+- clarifyingQuestions: exactly 3-5 targeted questions that would confirm the root cause; make them specific and actionable
+- confidenceScore: integer 0-100 reflecting how confident the pipeline is in its reproduction
+- severity: based on user impact, component criticality, reproducibility, and data risk`,
+    `Full analysis summary:
 
-Wrap in \`\`\`mermaid ... \`\`\` fences.
+Entities:\n${JSON.stringify(entityData, null, 2)}
 
-## 2. Clarifying Questions
+Hypotheses:\n${JSON.stringify(hypothesesData.hypotheses, null, 2)}
 
-List exactly 5 targeted questions that, if answered, would either confirm the root cause or significantly narrow the search space. Number them 1-5. Make them specific and actionable — not generic.
+Reproduction steps:\n${JSON.stringify(stepData, null, 2)}
 
-## 3. Confidence Score & Breakdown
-
-Provide a confidence score and a structured breakdown.
-Format EXACTLY as:
-CONFIDENCE_SCORE: [0-100]
-CONFIDENCE_EVIDENCE: ["evidence point 1", "evidence point 2", "evidence point 3"]
-CONFIDENCE_ASSUMPTIONS: ["assumption 1", "assumption 2"]
-CONFIDENCE_MISSING: ["missing info 1", "missing info 2"]
-
-## 4. Severity Classification
-
-Classify the bug severity based on: user impact, affected component criticality, reproducibility, data risk.
-Format EXACTLY as:
-SEVERITY: [critical|high|medium|low]
-SEVERITY_REASON: One sentence explaining the severity rating.`,
-    `Full analysis:\n\nEntities:\n${extractedEntities}\n\nHypotheses:\n${hypotheses}\n\nReproduction steps:\n${reproductionSteps}`,
+Test framework: ${testData.framework} — coverage: ${testData.coverageAreas.join(", ")}`,
     onEvent
   );
-
-  // Parse confidence score
-  const confidenceMatch = analysisOutput.match(/CONFIDENCE_SCORE:\s*(\d+)/);
-  const confidenceScore = confidenceMatch
-    ? Math.min(100, Math.max(0, parseInt(confidenceMatch[1], 10))) / 100
-    : 0.65;
-
-  // Parse confidence breakdown
-  let confidenceBreakdown: ConfidenceBreakdown = {
-    score: Math.round(confidenceScore * 100),
-    evidence: [],
-    assumptions: [],
-    missing: [],
-  };
-
-  try {
-    const evidenceMatch = analysisOutput.match(/CONFIDENCE_EVIDENCE:\s*(\[[\s\S]*?\])/);
-    const assumptionsMatch = analysisOutput.match(/CONFIDENCE_ASSUMPTIONS:\s*(\[[\s\S]*?\])/);
-    const missingMatch = analysisOutput.match(/CONFIDENCE_MISSING:\s*(\[[\s\S]*?\])/);
-
-    if (evidenceMatch) confidenceBreakdown.evidence = JSON.parse(evidenceMatch[1]);
-    if (assumptionsMatch) confidenceBreakdown.assumptions = JSON.parse(assumptionsMatch[1]);
-    if (missingMatch) confidenceBreakdown.missing = JSON.parse(missingMatch[1]);
-  } catch {
-    // Fallback if JSON parsing fails
-    confidenceBreakdown.evidence = ["Pipeline analysis completed successfully"];
-    confidenceBreakdown.assumptions = ["Input is representative of the actual bug scenario"];
-    confidenceBreakdown.missing = ["Additional environment details would improve accuracy"];
-  }
-
-  // Parse severity
-  const severityMatch = analysisOutput.match(/SEVERITY:\s*(critical|high|medium|low)/i);
-  const severity = (severityMatch?.[1]?.toLowerCase() ?? "medium") as "critical" | "high" | "medium" | "low";
-
-  const severityReasonMatch = analysisOutput.match(/SEVERITY_REASON:\s*(.+)/);
-  const severityReason = severityReasonMatch?.[1]?.trim() ?? "Severity assessed based on reproduction complexity and component impact.";
 
   auditTrail.push({
     timestamp: new Date().toISOString(),
     agent: "Analysis Synthesizer",
     action: "synthesized_analysis",
-    decision: `Final confidence: ${Math.round(confidenceScore * 100)}%, Severity: ${severity}. Generated flow diagram and 5 clarifying questions.`,
-    rationale: "Confidence derived from input quality, specificity of reproduction steps, and hypothesis evidence strength. Severity based on user impact and component criticality.",
+    decision: `Final confidence: ${synthData.confidenceScore}%, severity: ${synthData.severity}. Generated flow diagram and ${synthData.clarifyingQuestions.length} clarifying questions.`,
+    rationale: `Confidence derived from: ${synthData.confidenceEvidence.slice(0, 2).join("; ")}. Severity based on user impact and component criticality.`,
   });
 
-  // Extract just the mermaid block for flowDiagram
-  const mermaidMatch = analysisOutput.match(/```mermaid([\s\S]*?)```/);
-  const flowDiagram = mermaidMatch
-    ? `\`\`\`mermaid${mermaidMatch[1]}\`\`\``
-    : analysisOutput;
-
-  // Extract just the clarifying questions section (between ## 2 and ## 3)
-  const questionsMatch = analysisOutput.match(
-    /##\s*2[\.\)]\s*Clarifying Questions?\s*\n([\s\S]*?)(?=##\s*3[\.\)]|CONFIDENCE_SCORE:|$)/i
+  logger.info(
+    { confidenceScore: synthData.confidenceScore / 100, severity: synthData.severity, inputType },
+    "Pipeline complete — all 5 agents validated"
   );
-  const clarifyingQuestions = questionsMatch ? questionsMatch[1].trim() : "";
 
-  logger.info({ confidenceScore, severity, inputType }, "Pipeline complete");
-
+  // ── Serialize structured outputs for DB storage ───────────────────────────
   return {
-    extractedEntities,
-    hypotheses,
-    reproductionSteps,
-    testCode,
-    flowDiagram,
-    clarifyingQuestions,
-    confidenceScore,
-    confidenceBreakdown,
-    severity,
-    severityReason,
+    // JSON strings — frontend renders these as structured cards/lists
+    extractedEntities: JSON.stringify(entityData),
+    hypotheses: JSON.stringify(hypothesesData.hypotheses),
+    reproductionSteps: JSON.stringify(stepData),
+    // Plain strings
+    testCode: testData.testCode,
+    flowDiagram: synthData.flowDiagram,
+    clarifyingQuestions: JSON.stringify(synthData.clarifyingQuestions),
+    // Numeric + enum
+    confidenceScore: synthData.confidenceScore / 100,
+    confidenceBreakdown: {
+      score: synthData.confidenceScore,
+      evidence: synthData.confidenceEvidence,
+      assumptions: synthData.confidenceAssumptions,
+      missing: synthData.confidenceMissing,
+    },
+    severity: synthData.severity,
+    severityReason: synthData.severityReason,
     auditTrail,
   };
 }
+
+// ─── Tool: Environment Diff ───────────────────────────────────────────────────
 
 export async function runEnvDiff(
   env1: string,
@@ -402,8 +473,13 @@ Analyze the differences and identify which config change is most likely responsi
     ],
   });
 
-  return response.choices[0]?.message?.content ?? '{"differences":[],"verdict":"Unable to analyze","likelihood":"low","summary":"Analysis failed"}';
+  return (
+    response.choices[0]?.message?.content ??
+    '{"differences":[],"verdict":"Unable to analyze","likelihood":"low","summary":"Analysis failed"}'
+  );
 }
+
+// ─── Tool: NL2Test ───────────────────────────────────────────────────────────
 
 export async function runNl2Test(
   description: string,
@@ -442,8 +518,13 @@ Requirements for the test code:
     ],
   });
 
-  return response.choices[0]?.message?.content ?? '{"testCode":"","framework":"Jest","explanation":"","coverageNotes":""}';
+  return (
+    response.choices[0]?.message?.content ??
+    '{"testCode":"","framework":"Jest","explanation":"","coverageNotes":""}'
+  );
 }
+
+// ─── Tool: Flaky Detector ─────────────────────────────────────────────────────
 
 export async function runFlakyDetector(
   testCode: string,
@@ -490,19 +571,33 @@ If no flaky tests are found, return an empty flakyTests array with overallRisk "
     ],
   });
 
-  return response.choices[0]?.message?.content ?? '{"flakyTests":[],"overallRisk":"none","summary":"Unable to analyze"}';
+  return (
+    response.choices[0]?.message?.content ??
+    '{"flakyTests":[],"overallRisk":"none","summary":"Unable to analyze"}'
+  );
 }
+
+// ─── Tool: Correlation Engine ─────────────────────────────────────────────────
 
 export async function runCorrelation(
   targetInput: string,
   targetEntities: string,
-  candidates: Array<{ id: number; title: string; rawInput: string; extractedEntities: string | null; createdAt: Date }>
+  candidates: Array<{
+    id: number;
+    title: string;
+    rawInput: string;
+    extractedEntities: string | null;
+    createdAt: Date;
+  }>
 ): Promise<string> {
   if (candidates.length === 0) return "[]";
 
   const candidateSummaries = candidates
     .slice(0, 10)
-    .map(c => `ID: ${c.id}\nTitle: ${c.title}\nInput (truncated): ${c.rawInput.slice(0, 300)}\nEntities: ${(c.extractedEntities ?? "").slice(0, 300)}`)
+    .map(
+      (c) =>
+        `ID: ${c.id}\nTitle: ${c.title}\nInput (truncated): ${c.rawInput.slice(0, 300)}\nEntities: ${(c.extractedEntities ?? "").slice(0, 300)}`
+    )
     .join("\n\n---\n\n");
 
   const response = await openai.chat.completions.create({
