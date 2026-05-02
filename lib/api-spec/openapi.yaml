@@ -168,6 +168,16 @@ paths:
           required: true
           schema:
             type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                frameworkHint:
+                  type: string
+                  description: "Optional test framework override (e.g. Jest, Pytest, Cypress). If provided, the Test Writer will use this framework."
       responses:
         "200":
           description: SSE stream of agent events
@@ -175,6 +185,47 @@ paths:
             text/event-stream: {}
         "404":
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /analyses/{id}/regenerate-test:
+    post:
+      operationId: regenerateTest
+      tags: [analyses]
+      summary: Re-run Test Writer with a different framework
+      description: |
+        Re-runs only the Test Writer agent with a specified framework override.
+        The reproduction steps and entities from the original run are reused.
+        Only works on completed analyses.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegenerateTestBody"
+      responses:
+        "200":
+          description: Regenerated test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegeneratedTest"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          description: Analysis not in completed state
           content:
             application/json:
               schema:
@@ -861,6 +912,33 @@ components:
         - url
         - number
         - author
+
+    RegenerateTestBody:
+      type: object
+      required:
+        - framework
+      properties:
+        framework:
+          type: string
+          description: "Target test framework (e.g. Jest, Pytest, Cypress, Playwright, Mocha, Vitest)"
+
+    RegeneratedTest:
+      type: object
+      required:
+        - testCode
+        - framework
+        - language
+        - testSyntaxStatus
+      properties:
+        testCode:
+          type: string
+        framework:
+          type: string
+        language:
+          type: string
+        testSyntaxStatus:
+          type: string
+          enum: [verified, warning, unchecked]
 
     ApiError:
       type: object

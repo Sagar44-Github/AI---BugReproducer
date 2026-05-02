@@ -8,7 +8,7 @@ import {
   RunAnalysisParams,
   UpdateAnalysisBody,
 } from "@workspace/api-zod";
-import { runBugReproductionPipeline, runCorrelation, type AgentEvent } from "../lib/agents";
+import { runBugReproductionPipeline, runCorrelation, runTestWriterWithOverride, type AgentEvent } from "../lib/agents";
 import { AgentValidationError, AgentTimeoutError } from "../lib/agentSchemas";
 import { logger } from "../lib/logger";
 import type { Response } from "express";
@@ -573,13 +573,19 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
     }
   }
 
+  const frameworkHint =
+    typeof req.body?.frameworkHint === "string" && req.body.frameworkHint.length > 0
+      ? (req.body.frameworkHint as string)
+      : undefined;
+
   try {
     const result = await runBugReproductionPipeline(
       analysis.rawInput,
       analysis.inputType,
       analysis.codeContext,
       sendEvent,
-      hasSimilarBugs
+      hasSimilarBugs,
+      frameworkHint
     );
 
     await db
@@ -633,6 +639,64 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
   }
 
   res.end();
+});
+
+// POST /analyses/:id/regenerate-test — re-run Test Writer with a framework override
+router.post("/analyses/:id/regenerate-test", async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const params = RunAnalysisParams.safeParse({ id: rawId });
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
+    return;
+  }
+
+  const framework =
+    typeof req.body?.framework === "string" && req.body.framework.length > 0
+      ? (req.body.framework as string)
+      : null;
+  if (!framework) {
+    res.status(400).json({ error: "framework is required" });
+    return;
+  }
+
+  const [analysis] = await db
+    .select()
+    .from(analysesTable)
+    .where(eq(analysesTable.id, params.data.id));
+
+  if (!analysis) {
+    res.status(404).json({ error: "Analysis not found" });
+    return;
+  }
+  if (analysis.status !== "completed") {
+    res.status(409).json({ error: "Analysis must be completed before regenerating tests" });
+    return;
+  }
+  if (!analysis.extractedEntities || !analysis.reproductionSteps) {
+    res.status(409).json({ error: "Analysis is missing entity or step data" });
+    return;
+  }
+
+  try {
+    const result = await runTestWriterWithOverride(
+      analysis.rawInput,
+      analysis.inputType,
+      analysis.extractedEntities,
+      analysis.reproductionSteps,
+      analysis.codeContext,
+      framework
+    );
+
+    await db
+      .update(analysesTable)
+      .set({ testCode: result.testCode, testSyntaxStatus: result.testSyntaxStatus, updatedAt: new Date() })
+      .where(eq(analysesTable.id, params.data.id));
+
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "Test regeneration error");
+    res.status(500).json({ error: "Failed to regenerate test code. Try again." });
+  }
 });
 
 export default router;

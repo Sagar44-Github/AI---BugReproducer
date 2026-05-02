@@ -288,7 +288,8 @@ export async function runBugReproductionPipeline(
   inputType: string,
   codeContext: string | null | undefined,
   onEvent: (event: AgentEvent) => void,
-  hasSimilarBugs = false
+  hasSimilarBugs = false,
+  frameworkHint?: string
 ): Promise<PipelineResult> {
   const sourceLabel = SOURCE_TYPE_LABELS[inputType] ?? "bug report";
   const sourceHint = SOURCE_TYPE_HINTS[inputType] ?? "";
@@ -507,6 +508,9 @@ Rules:
   //    Receives validated EntityExtractionOutput + StepValidationOutput
 
   const t0_test = Date.now();
+  const frameworkConstraint = frameworkHint
+    ? `\n\nFRAMEWORK OVERRIDE: You MUST use "${frameworkHint}" as the framework. Do not choose any other framework. The "framework" field in your JSON MUST be "${frameworkHint}".`
+    : "";
   const testData: TestWriterOutput = await runValidatedAgent(
     "Test Writer",
     TestWriterSchema,
@@ -522,7 +526,7 @@ Rules:
 - Assertions must FAIL with the bug present and PASS once it is fixed
 - Cover: main reproduction case, one edge case, one regression guard
 - Default to Jest + TypeScript unless another framework is clearly implied
-- framework and language must be explicit strings (e.g. "Jest", "TypeScript")`,
+- framework and language must be explicit strings (e.g. "Jest", "TypeScript")${frameworkConstraint}`,
     `Original ${sourceLabel}:\n${rawInput}\n\nValidated entities:\n${JSON.stringify(
       entityData,
       null,
@@ -750,6 +754,84 @@ Test framework: ${finalTestData.framework} — coverage: ${finalTestData.coverag
     severityReason: synthData.severityReason,
     auditTrail,
   };
+}
+
+// ─── Tool: Test Writer override (regenerate test for a different framework) ───
+
+export async function runTestWriterWithOverride(
+  rawInput: string,
+  inputType: string,
+  extractedEntitiesJson: string,
+  reproductionStepsJson: string,
+  codeContext: string | null | undefined,
+  framework: string
+): Promise<{ testCode: string; framework: string; language: string; testSyntaxStatus: TestSyntaxStatus }> {
+  const sourceLabel = SOURCE_TYPE_LABELS[inputType] ?? "bug report";
+  const context = codeContext
+    ? `\n\nRelevant code context:\n\`\`\`\n${codeContext}\n\`\`\``
+    : "";
+
+  const noop = (_: AgentEvent) => { /* fire-and-forget — no SSE for regenerate */ };
+
+  const testData = await runValidatedAgent(
+    "Test Writer",
+    TestWriterSchema,
+    `You are a senior software engineer. Generate complete, executable test code to reproduce and verify the described bug.
+
+CRITICAL: Respond ONLY with a valid JSON object. No markdown. No explanation. No code fences.
+Use this exact schema:
+${TEST_SCHEMA_HINT}
+
+FRAMEWORK OVERRIDE: You MUST use "${framework}" as the framework. The "framework" field MUST be "${framework}".
+
+Rules:
+- testCode: the COMPLETE, runnable test — no placeholders, no pseudocode
+- Add a top comment: // Bug Reproduction Test — [one-line description]
+- Assertions must FAIL with the bug present and PASS once it is fixed
+- Cover: main reproduction case, one edge case, one regression guard
+- framework and language must be explicit strings`,
+    `Original ${sourceLabel}:\n${rawInput}\n\nValidated entities:\n${extractedEntitiesJson}\n\nValidated reproduction steps:\n${reproductionStepsJson}${context}`,
+    noop
+  );
+
+  let finalTestCode = testData.testCode;
+  let testSyntaxStatus: TestSyntaxStatus = "unchecked";
+
+  const syntaxResult = validateTestCode(testData.testCode, testData.framework, testData.language);
+  if (syntaxResult.status === "verified" || syntaxResult.status === "unchecked") {
+    testSyntaxStatus = syntaxResult.status;
+  } else {
+    const correctionUserPrompt = `The following ${testData.framework} (${testData.language}) test has a syntax error.
+
+${syntaxResult.line ? `Error at line ${syntaxResult.line}: ` : "Error: "}${syntaxResult.error ?? "syntax error"}
+
+FAULTY CODE:
+${testData.testCode}
+
+Fix ONLY the syntax error. Return the complete corrected JSON.`;
+
+    const { content: correctedRaw } = await runAgent(
+      "Test Writer [correction]",
+      `You are a code quality assistant. Fix the syntax error and return valid JSON matching the test schema.\n\nCRITICAL: Respond ONLY with a valid JSON object.\n${TEST_SCHEMA_HINT}`,
+      correctionUserPrompt,
+      noop
+    );
+
+    const correctedParsed = safeParseStructured(TestWriterSchema, correctedRaw);
+    if (correctedParsed.success) {
+      const recheck = validateTestCode(correctedParsed.data.testCode, correctedParsed.data.framework, correctedParsed.data.language);
+      if (recheck.valid) {
+        finalTestCode = correctedParsed.data.testCode;
+        testSyntaxStatus = "verified";
+      } else {
+        testSyntaxStatus = "warning";
+      }
+    } else {
+      testSyntaxStatus = "warning";
+    }
+  }
+
+  return { testCode: finalTestCode, framework: testData.framework, language: testData.language, testSyntaxStatus };
 }
 
 // ─── Tool: Environment Diff ───────────────────────────────────────────────────

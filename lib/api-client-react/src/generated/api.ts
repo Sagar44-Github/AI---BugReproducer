@@ -36,6 +36,9 @@ import type {
   ListAnalysesParams,
   Nl2TestBody,
   Nl2TestResult,
+  RegenerateTestBody,
+  RegeneratedTest,
+  RunAnalysisBody,
   UpdateAnalysisBody,
 } from "./api.schemas";
 
@@ -575,11 +578,14 @@ export const getRunAnalysisUrl = (id: number) => {
 
 export const runAnalysis = async (
   id: number,
+  runAnalysisBody?: RunAnalysisBody,
   options?: RequestInit,
 ): Promise<unknown> => {
   return customFetch<unknown>(getRunAnalysisUrl(id), {
     ...options,
     method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(runAnalysisBody),
   });
 };
 
@@ -590,14 +596,14 @@ export const getRunAnalysisMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof runAnalysis>>,
     TError,
-    { id: number },
+    { id: number; data: BodyType<RunAnalysisBody> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof runAnalysis>>,
   TError,
-  { id: number },
+  { id: number; data: BodyType<RunAnalysisBody> },
   TContext
 > => {
   const mutationKey = ["runAnalysis"];
@@ -611,11 +617,11 @@ export const getRunAnalysisMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof runAnalysis>>,
-    { id: number }
+    { id: number; data: BodyType<RunAnalysisBody> }
   > = (props) => {
-    const { id } = props ?? {};
+    const { id, data } = props ?? {};
 
-    return runAnalysis(id, requestOptions);
+    return runAnalysis(id, data, requestOptions);
   };
 
   return { mutationFn, ...mutationOptions };
@@ -624,7 +630,7 @@ export const getRunAnalysisMutationOptions = <
 export type RunAnalysisMutationResult = NonNullable<
   Awaited<ReturnType<typeof runAnalysis>>
 >;
-
+export type RunAnalysisMutationBody = BodyType<RunAnalysisBody>;
 export type RunAnalysisMutationError = ErrorType<ApiError>;
 
 /**
@@ -637,17 +643,108 @@ export const useRunAnalysis = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof runAnalysis>>,
     TError,
-    { id: number },
+    { id: number; data: BodyType<RunAnalysisBody> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof runAnalysis>>,
   TError,
-  { id: number },
+  { id: number; data: BodyType<RunAnalysisBody> },
   TContext
 > => {
   return useMutation(getRunAnalysisMutationOptions(options));
+};
+
+/**
+ * Re-runs only the Test Writer agent with a specified framework override.
+The reproduction steps and entities from the original run are reused.
+Only works on completed analyses.
+
+ * @summary Re-run Test Writer with a different framework
+ */
+export const getRegenerateTestUrl = (id: number) => {
+  return `/api/analyses/${id}/regenerate-test`;
+};
+
+export const regenerateTest = async (
+  id: number,
+  regenerateTestBody: RegenerateTestBody,
+  options?: RequestInit,
+): Promise<RegeneratedTest> => {
+  return customFetch<RegeneratedTest>(getRegenerateTestUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(regenerateTestBody),
+  });
+};
+
+export const getRegenerateTestMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof regenerateTest>>,
+    TError,
+    { id: number; data: BodyType<RegenerateTestBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof regenerateTest>>,
+  TError,
+  { id: number; data: BodyType<RegenerateTestBody> },
+  TContext
+> => {
+  const mutationKey = ["regenerateTest"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof regenerateTest>>,
+    { id: number; data: BodyType<RegenerateTestBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return regenerateTest(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RegenerateTestMutationResult = NonNullable<
+  Awaited<ReturnType<typeof regenerateTest>>
+>;
+export type RegenerateTestMutationBody = BodyType<RegenerateTestBody>;
+export type RegenerateTestMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Re-run Test Writer with a different framework
+ */
+export const useRegenerateTest = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof regenerateTest>>,
+    TError,
+    { id: number; data: BodyType<RegenerateTestBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof regenerateTest>>,
+  TError,
+  { id: number; data: BodyType<RegenerateTestBody> },
+  TContext
+> => {
+  return useMutation(getRegenerateTestMutationOptions(options));
 };
 
 /**

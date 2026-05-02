@@ -439,6 +439,52 @@ export function AnalysisDetail() {
     } catch { return {}; }
   });
   const [editingNoteIdx, setEditingNoteIdx] = useState<number | null>(null);
+
+  // Framework override — user can swap the test framework after a run
+  const [frameworkOverride, setFrameworkOverride] = useState<string>(
+    () => localStorage.getItem("preferredFramework") ?? ""
+  );
+  const [isRegenerating, setIsRegenerating] = useState(false);
+
+  const FRAMEWORK_OPTIONS = [
+    { value: "Jest",       desc: "Unit/integration · JavaScript" },
+    { value: "Vitest",     desc: "Unit/integration · Vite" },
+    { value: "Pytest",     desc: "Unit/integration · Python" },
+    { value: "Mocha",      desc: "Unit/integration · Node.js" },
+    { value: "Cypress",    desc: "E2E · Browser" },
+    { value: "Playwright", desc: "E2E · Cross-browser" },
+    { value: "Postman",    desc: "REST API testing" },
+    { value: "JUnit",      desc: "Unit testing · Java" },
+    { value: "RSpec",      desc: "BDD · Ruby" },
+  ];
+
+  const testWriterEntry = auditTrail.find(e => e.agent === "Test Writer");
+  const detectedFramework = testWriterEntry?.details?.find(d => d.label === "Framework detected")?.value ?? "";
+  const detectedLanguage  = testWriterEntry?.details?.find(d => d.label === "Language")?.value ?? "";
+
+  const handleRegenerateTest = async () => {
+    if (!frameworkOverride || isRegenerating) return;
+    setIsRegenerating(true);
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/analyses/${id}/regenerate-test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ framework: frameworkOverride }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Unknown error" })) as { error?: string };
+        throw new Error(err.error ?? "Regeneration failed");
+      }
+      localStorage.setItem("preferredFramework", frameworkOverride);
+      queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(id) });
+      toast({ title: "Test code updated", description: `Regenerated with ${frameworkOverride}` });
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      toast({ variant: "destructive", title: "Regeneration failed", description: e.message ?? "Try again" });
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
   const saveAuditNote = (idx: number, text: string) => {
     const updated = { ...auditNotes, [idx]: text };
     setAuditNotes(updated);
@@ -620,8 +666,11 @@ export function AnalysisDetail() {
     abortControllerRef.current = new AbortController();
 
     try {
+      const storedHint = localStorage.getItem("preferredFramework");
       const response = await fetch(`${import.meta.env.BASE_URL}api/analyses/${id}/run`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: storedHint ? JSON.stringify({ frameworkHint: storedHint }) : undefined,
         signal: abortControllerRef.current.signal
       });
 
@@ -1185,6 +1234,50 @@ export function AnalysisDetail() {
                     </div>
                   </CardHeader>
                   <CardContent className="p-0">
+                    {/* Framework detection + override panel */}
+                    {detectedFramework && analysis.status === "completed" && (
+                      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border/50 bg-muted/20 flex-wrap">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className="text-foreground/70 font-medium">Framework detected:</span>
+                          <span className="font-mono font-semibold text-primary/90">{detectedFramework}</span>
+                          {detectedLanguage && (
+                            <span className="text-muted-foreground/60">· {detectedLanguage}</span>
+                          )}
+                          {localStorage.getItem("preferredFramework") === detectedFramework && (
+                            <Badge variant="outline" className="text-xs py-0 px-1.5 text-emerald-400 border-emerald-500/30 ml-1">
+                              saved preference
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={frameworkOverride}
+                            onChange={e => setFrameworkOverride(e.target.value)}
+                            disabled={isRegenerating}
+                            className="text-xs bg-background border border-border/60 rounded px-2 py-1 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-50"
+                          >
+                            <option value="">Select framework…</option>
+                            {FRAMEWORK_OPTIONS.map(f => (
+                              <option key={f.value} value={f.value}>{f.value} — {f.desc}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={handleRegenerateTest}
+                            disabled={!frameworkOverride || frameworkOverride === detectedFramework || isRegenerating}
+                            className="text-xs px-3 py-1 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5 font-medium"
+                          >
+                            {isRegenerating ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                Regenerating…
+                              </>
+                            ) : (
+                              "Regenerate"
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {analysis.testSyntaxStatus === "warning" && (
                       <div className="flex items-start gap-2 px-4 py-3 bg-amber-500/5 border-b border-amber-500/20 text-xs text-amber-300">
                         <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />

@@ -217,6 +217,41 @@ export const RunAnalysisParams = zod.object({
   id: zod.coerce.number(),
 });
 
+export const RunAnalysisBody = zod.object({
+  frameworkHint: zod
+    .string()
+    .optional()
+    .describe(
+      "Optional test framework override (e.g. Jest, Pytest, Cypress). If provided, the Test Writer will use this framework.",
+    ),
+});
+
+/**
+ * Re-runs only the Test Writer agent with a specified framework override.
+The reproduction steps and entities from the original run are reused.
+Only works on completed analyses.
+
+ * @summary Re-run Test Writer with a different framework
+ */
+export const RegenerateTestParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const RegenerateTestBody = zod.object({
+  framework: zod
+    .string()
+    .describe(
+      "Target test framework (e.g. Jest, Pytest, Cypress, Playwright, Mocha, Vitest)",
+    ),
+});
+
+export const RegenerateTestResponse = zod.object({
+  testCode: zod.string(),
+  framework: zod.string(),
+  language: zod.string(),
+  testSyntaxStatus: zod.enum(["verified", "warning", "unchecked"]),
+});
+
 /**
  * @summary Export analysis as markdown report
  */

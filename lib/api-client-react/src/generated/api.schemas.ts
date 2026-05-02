@@ -396,6 +396,27 @@ export interface GithubIssueContent {
   author: string;
 }
 
+export interface RegenerateTestBody {
+  /** Target test framework (e.g. Jest, Pytest, Cypress, Playwright, Mocha, Vitest) */
+  framework: string;
+}
+
+export type RegeneratedTestTestSyntaxStatus =
+  (typeof RegeneratedTestTestSyntaxStatus)[keyof typeof RegeneratedTestTestSyntaxStatus];
+
+export const RegeneratedTestTestSyntaxStatus = {
+  verified: "verified",
+  warning: "warning",
+  unchecked: "unchecked",
+} as const;
+
+export interface RegeneratedTest {
+  testCode: string;
+  framework: string;
+  language: string;
+  testSyntaxStatus: RegeneratedTestTestSyntaxStatus;
+}
+
 export interface ApiError {
   error: string;
 }
@@ -415,3 +436,8 @@ export const ListAnalysesStatus = {
   completed: "completed",
   failed: "failed",
 } as const;
+
+export type RunAnalysisBody = {
+  /** Optional test framework override (e.g. Jest, Pytest, Cypress). If provided, the Test Writer will use this framework. */
+  frameworkHint?: string;
+};
