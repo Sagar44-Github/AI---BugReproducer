@@ -503,10 +503,42 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
     .set({ status: "running", updatedAt: new Date() })
     .where(eq(analysesTable.id, params.data.id));
 
-  // Deterministic pre-check: does any other completed analysis exist in the DB?
-  // Used by the confidence scoring rubric for the "similar_bug" factor.
+  // ── Similar-bug keyword overlap check ────────────────────────────────────
+  // Extracts meaningful tokens from text, ignoring common stop words.
+  // Two analyses are "similar" when they share ≥ 2 meaningful keywords —
+  // defensible answer to "what makes you say this is similar to a prior bug?"
+  function extractKeywords(text: string): Set<string> {
+    const STOP = new Set([
+      "this","that","with","from","have","been","when","where","what","which",
+      "their","there","then","than","will","would","could","should","does",
+      "error","issue","problem","null","undefined","true","false","type",
+      "object","function","return","string","number","boolean","array",
+    ]);
+    return new Set(
+      text.toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length >= 4 && !STOP.has(w))
+        .slice(0, 80)
+    );
+  }
+
+  function keywordOverlap(a: Set<string>, b: Set<string>): number {
+    let count = 0;
+    for (const w of a) if (b.has(w)) count++;
+    return count;
+  }
+
+  const currentKeywords = extractKeywords(
+    [analysis.rawInput, analysis.tags ?? "", analysis.codeContext ?? ""].join(" ")
+  );
+
   const priorAnalyses = await db
-    .select({ id: analysesTable.id })
+    .select({
+      id: analysesTable.id,
+      extractedEntities: analysesTable.extractedEntities,
+      tags: analysesTable.tags,
+    })
     .from(analysesTable)
     .where(
       and(
@@ -514,8 +546,17 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
         eq(analysesTable.status, "completed")
       )
     )
-    .limit(1);
-  const hasSimilarBugs = priorAnalyses.length > 0;
+    .limit(30);
+
+  let hasSimilarBugs = false;
+  for (const prior of priorAnalyses) {
+    const priorText = [prior.extractedEntities ?? "", prior.tags ?? ""].join(" ");
+    const priorKeywords = extractKeywords(priorText);
+    if (keywordOverlap(currentKeywords, priorKeywords) >= 2) {
+      hasSimilarBugs = true;
+      break;
+    }
+  }
 
   try {
     const result = await runBugReproductionPipeline(

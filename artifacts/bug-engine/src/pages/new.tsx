@@ -82,14 +82,23 @@ export function NewAnalysis() {
       if (!response.ok) throw new Error("Failed to fetch issue");
       const data = await response.json();
       
-      const formatted = `Title: ${data.title}\n\nState: ${data.state}\nAuthor: @${data.author}\nLabels: ${(data.labels || []).join(', ')}\n\nDescription:\n${data.body}\n\nComments:\n${(data.comments || []).join('\n\n')}`;
+      // Use server-assembled formattedContent if available (handles truncation)
+      const formatted = data.formattedContent ?? `Title: ${data.title}\n\nState: ${data.state}\nAuthor: @${data.author}\nLabels: ${(data.labels || []).join(', ')}\n\nDescription:\n${data.body}\n\nComments:\n${(data.comments || []).join('\n\n')}`;
       
       form.setValue("rawInput", formatted);
       if (!form.getValues("title")) {
         form.setValue("title", data.title);
       }
       
-      toast({ title: "Issue fetched successfully" });
+      if (data.truncated) {
+        toast({
+          variant: "destructive",
+          title: "Issue content was truncated",
+          description: `The issue has ${data.originalCommentCount} comments. Long comment threads were trimmed to prevent context overflow — the pipeline will still receive the most important content.`,
+        });
+      } else {
+        toast({ title: "Issue fetched successfully" });
+      }
     } catch (err: any) {
       toast({ variant: "destructive", title: "Failed to fetch issue", description: err.message });
     } finally {

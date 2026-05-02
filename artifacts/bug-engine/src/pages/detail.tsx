@@ -13,7 +13,7 @@ import {
   ShieldAlert, ShieldCheck, ShieldQuestion, Shield,
   ChevronDown, ChevronUp, Users, MessageSquare, Clock,
   Network, CheckCheck, XCircle, HelpCircle, PenLine,
-  RefreshCw, Send
+  RefreshCw, Send, Bot
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -389,6 +389,15 @@ export function AnalysisDetail() {
     try { return analysis?.confidenceBreakdown ? JSON.parse(analysis.confidenceBreakdown) : null; } catch { return null; }
   })();
 
+  // Animate the progress bar from 0 → actual score when the card first appears
+  const [animatedScore, setAnimatedScore] = useState(0);
+  useEffect(() => {
+    if (!confidenceBreakdown) return;
+    setAnimatedScore(0);
+    const t = setTimeout(() => setAnimatedScore(confidenceBreakdown.score), 120);
+    return () => clearTimeout(t);
+  }, [confidenceBreakdown?.score]);
+
   // Audit trail
   const auditTrail: AuditEntry[] = (() => {
     try { return analysis?.auditTrail ? JSON.parse(analysis.auditTrail) : []; } catch { return []; }
@@ -730,8 +739,11 @@ export function AnalysisDetail() {
                 <div className="mt-1 flex items-center gap-2">
                   <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden max-w-48">
                     <div
-                      className="h-full bg-primary rounded-full transition-all"
-                      style={{ width: `${confidenceBreakdown.score}%` }}
+                      className="h-full bg-primary rounded-full"
+                      style={{
+                        width: `${animatedScore}%`,
+                        transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)",
+                      }}
                     />
                   </div>
                   <span className="text-xs text-muted-foreground">
@@ -776,20 +788,40 @@ export function AnalysisDetail() {
                             code_snippet: "Code snippet provided",
                             reproduction_steps: "Repro steps given",
                           };
+                          const subtitles: Record<string, string> = {
+                            stack_trace: "minified — partial credit",
+                          };
                           const max = maxPts[key] ?? 0;
                           const earned = pts > 0;
+                          const isPartial = earned && pts < max;
+                          const cardClass = isPartial
+                            ? "border-amber-500/30 bg-amber-500/5"
+                            : earned
+                              ? "border-emerald-500/30 bg-emerald-500/5"
+                              : "border-border/40 bg-muted/20 opacity-60";
+                          const dotClass = isPartial
+                            ? "bg-amber-400"
+                            : earned
+                              ? "bg-emerald-400"
+                              : "bg-muted-foreground/30";
+                          const numClass = isPartial
+                            ? "text-amber-400"
+                            : earned
+                              ? "text-emerald-400"
+                              : "text-muted-foreground";
                           return (
                             <div
                               key={key}
-                              className={`flex items-center gap-3 rounded px-3 py-2 border text-xs ${
-                                earned
-                                  ? "border-emerald-500/30 bg-emerald-500/5"
-                                  : "border-border/40 bg-muted/20 opacity-60"
-                              }`}
+                              className={`flex items-center gap-3 rounded px-3 py-2 border text-xs ${cardClass}`}
                             >
-                              <div className={`w-2 h-2 rounded-full shrink-0 ${earned ? "bg-emerald-400" : "bg-muted-foreground/30"}`} />
-                              <span className="flex-1 text-foreground">{labels[key] ?? key.replace(/_/g, " ")}</span>
-                              <span className={`font-mono font-bold shrink-0 ${earned ? "text-emerald-400" : "text-muted-foreground"}`}>
+                              <div className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} />
+                              <span className="flex-1 text-foreground">
+                                {labels[key] ?? key.replace(/_/g, " ")}
+                                {isPartial && subtitles[key] && (
+                                  <span className="ml-1.5 text-amber-400/70 font-normal">({subtitles[key]})</span>
+                                )}
+                              </span>
+                              <span className={`font-mono font-bold shrink-0 ${numClass}`}>
                                 +{pts}<span className="text-muted-foreground font-normal">/{max}</span>
                               </span>
                             </div>
@@ -799,35 +831,46 @@ export function AnalysisDetail() {
                     </div>
                   )}
 
-                  {/* Qualitative reasoning from synthesizer */}
+                  {/* AI Qualitative Context — clearly separated from the deterministic rubric */}
                   {(confidenceBreakdown.evidence.length > 0 || confidenceBreakdown.assumptions.length > 0) && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-border/40">
-                      {confidenceBreakdown.evidence.length > 0 && (
-                        <div>
-                          <h4 className="text-xs uppercase tracking-wider font-semibold text-green-400 mb-2">Supporting Evidence</h4>
-                          <ul className="space-y-1.5">
-                            {confidenceBreakdown.evidence.map((e, i) => (
-                              <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0 mt-0.5" />
-                                {e}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                      {confidenceBreakdown.assumptions.length > 0 && (
-                        <div>
-                          <h4 className="text-xs uppercase tracking-wider font-semibold text-amber-400 mb-2">Assumptions Made</h4>
-                          <ul className="space-y-1.5">
-                            {confidenceBreakdown.assumptions.map((a, i) => (
-                              <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
-                                <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-                                {a}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
+                    <div className="rounded border border-dashed border-border/50 bg-muted/10 p-4">
+                      <div className="flex items-center gap-2 mb-3 pb-2 border-b border-border/30">
+                        <Bot className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                          AI Qualitative Context
+                        </span>
+                        <span className="ml-auto text-xs text-muted-foreground/60 font-mono italic">
+                          does not affect score
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {confidenceBreakdown.evidence.length > 0 && (
+                          <div>
+                            <h4 className="text-xs font-semibold text-muted-foreground mb-2">Supporting observations</h4>
+                            <ul className="space-y-1.5">
+                              {confidenceBreakdown.evidence.map((e, i) => (
+                                <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0 mt-0.5" />
+                                  {e}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {confidenceBreakdown.assumptions.length > 0 && (
+                          <div>
+                            <h4 className="text-xs font-semibold text-muted-foreground mb-2">Assumptions made</h4>
+                            <ul className="space-y-1.5">
+                              {confidenceBreakdown.assumptions.map((a, i) => (
+                                <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                                  <AlertCircle className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0 mt-0.5" />
+                                  {a}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

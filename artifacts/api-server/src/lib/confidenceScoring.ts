@@ -76,6 +76,7 @@ export type ScoredConfidence = {
 
 // ─── Detection helpers ────────────────────────────────────────────────────────
 
+// Patterns that identify a stack trace is present (any format)
 const STACK_TRACE_PATTERNS = [
   /at\s+[\w$./<>]+\s*\(.*:\d+:\d+\)/m,        // JS/Node.js: at fn (file:line:col)
   /at\s+[\w$./<>]+\s+\(.*\)/m,                 // JS: at fn (file)
@@ -88,6 +89,18 @@ const STACK_TRACE_PATTERNS = [
   /\.rb:\d+:in `/m,                             // Ruby
   /\#\d+ .+ in .+\(.+\)/m,                     // C++ backtrace
   /caused by:/im,                               // Chained exception
+];
+
+// Patterns that indicate the trace is MINIFIED — reproducibility value is lower.
+// A minified trace typically has:
+//   • A hashed/fingerprinted filename  (e.g. main.abc12.js)
+//   • A very large column number       (e.g. :1:4521)
+//   • Single-letter or mangled fn names (e.g. "at t.<anonymous>")
+const MINIFIED_TRACE_PATTERNS = [
+  /\.[a-f0-9]{4,}\.(js|mjs|cjs):\d+:\d{3,}/i,          // bundle.a1b2c.js:1:4521
+  /\bchunk[.\-][a-zA-Z0-9]{4,}\.(js|mjs):\d+:\d+/i,    // chunk.abc12.js:1:234
+  /\([\w.\-\/]+\.[a-f0-9]{4,}\.js:\d+:\d{3,}\)/,        // (app.f9e8d.js:1:4521)
+  /at\s+[a-z]\s+\(/,                                    // at a (, at t.< — single-letter fn
 ];
 
 const CODE_PATTERNS = [
@@ -145,13 +158,16 @@ export function calculateConfidenceScore(
     rubric.frequency = RUBRIC_WEIGHTS.frequency;
   }
 
-  // ── Stack trace (+25) ─────────────────────────────────────────────────────
-  const hasStackTrace =
-    STACK_TRACE_PATTERNS.some((p) => p.test(rawInput)) ||
-    (entityData.errorMessages.length > 0 && STACK_TRACE_PATTERNS.some((p) =>
-      entityData.errorMessages.some((msg) => p.test(msg))
-    ));
-  if (hasStackTrace) rubric.stack_trace = RUBRIC_WEIGHTS.stack_trace;
+  // ── Stack trace (+10 minified / +25 readable) ────────────────────────────
+  // Minified traces (hashed filenames, 4-digit+ column numbers, single-letter
+  // function names) are detected and awarded only +10 — they confirm a trace
+  // exists but provide far less reproduction value than a readable trace.
+  const allTraceText = [rawInput, ...entityData.errorMessages].join("\n");
+  const hasStackTrace = STACK_TRACE_PATTERNS.some((p) => p.test(allTraceText));
+  if (hasStackTrace) {
+    const isMinified = MINIFIED_TRACE_PATTERNS.some((p) => p.test(allTraceText));
+    rubric.stack_trace = isMinified ? 10 : RUBRIC_WEIGHTS.stack_trace;
+  }
 
   // ── Expected behavior (+15) ───────────────────────────────────────────────
   // Must be substantive — more than just a single word or filler phrase
