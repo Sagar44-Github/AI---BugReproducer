@@ -13,7 +13,7 @@ import {
   ShieldAlert, ShieldCheck, ShieldQuestion, Shield,
   ChevronDown, ChevronUp, Users, MessageSquare, Clock,
   Network, CheckCheck, XCircle, HelpCircle, PenLine,
-  RefreshCw, Send, Bot
+  RefreshCw, Send, Bot, Download, FileJson
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -67,12 +67,20 @@ type ConfidenceBreakdown = {
   assumptions: string[];
 };
 
+type AuditDetail = {
+  label: string;
+  value: string;
+  status?: "ok" | "warn" | "info" | "error";
+};
+
 type AuditEntry = {
   timestamp: string;
   agent: string;
   action: string;
   decision: string;
   rationale: string;
+  durationMs?: number;
+  details?: AuditDetail[];
 };
 
 type CorrelationMatch = {
@@ -422,6 +430,56 @@ export function AnalysisDetail() {
   })();
   // Used by the test-code warning banner to show the specific error that failed
   const syntaxAuditEntry = auditTrail.find(e => e.agent === "Syntax Validator");
+
+  // Per-entry audit notes (persisted to localStorage per analysis)
+  const [auditNotes, setAuditNotes] = useState<Record<number, string>>(() => {
+    try {
+      const saved = localStorage.getItem(`auditNotes_${id}`);
+      return saved ? (JSON.parse(saved) as Record<number, string>) : {};
+    } catch { return {}; }
+  });
+  const [editingNoteIdx, setEditingNoteIdx] = useState<number | null>(null);
+  const saveAuditNote = (idx: number, text: string) => {
+    const updated = { ...auditNotes, [idx]: text };
+    setAuditNotes(updated);
+    localStorage.setItem(`auditNotes_${id}`, JSON.stringify(updated));
+  };
+
+  // Audit export helpers
+  const exportAuditJson = () => {
+    const blob = new Blob([JSON.stringify(auditTrail, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `audit-trail-${id}.json`; a.click();
+    URL.revokeObjectURL(url);
+  };
+  const exportAuditMarkdown = () => {
+    const lines: string[] = [
+      `# Audit Trail — ${analysis?.title ?? `Analysis ${id}`}`,
+      `> Generated: ${new Date().toISOString()}`,
+      "",
+    ];
+    auditTrail.forEach((e, i) => {
+      lines.push(`## ${i + 1}. ${e.agent} — \`${e.action.replace(/_/g, " ")}\``);
+      lines.push(`**Time:** ${e.timestamp}${e.durationMs != null ? `  |  **Duration:** ${e.durationMs < 1000 ? `${e.durationMs}ms` : `${(e.durationMs / 1000).toFixed(1)}s`}` : ""}`);
+      lines.push(`**Decision:** ${e.decision}`);
+      lines.push(`**Rationale:** ${e.rationale}`);
+      if (e.details && e.details.length > 0) {
+        lines.push(""); lines.push("| # | Field | Value | Status |");
+        lines.push("|---|-------|-------|--------|");
+        e.details.forEach((d, di) => {
+          lines.push(`| ${di + 1} | ${d.label} | ${d.value.replace(/\|/g, "\\|")} | ${d.status ?? "info"} |`);
+        });
+      }
+      if (auditNotes[i]) { lines.push(""); lines.push(`> **Note:** ${auditNotes[i]}`); }
+      lines.push("");
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `audit-trail-${id}.md`; a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Correlations
   const [correlations, setCorrelations] = useState<CorrelationMatch[]>([]);
@@ -1211,35 +1269,117 @@ export function AnalysisDetail() {
               <TabsContent value="audit" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
                   <CardHeader className="pb-3 border-b border-border/50">
-                    <CardTitle className="text-sm font-medium flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-primary" />
-                      Reproduction Audit Trail
-                    </CardTitle>
-                    <p className="text-xs text-muted-foreground">Every decision the pipeline made — fully auditable</p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <CardTitle className="text-sm font-medium flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-primary" />
+                          Reproduction Audit Trail
+                        </CardTitle>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Every decision at every agent — {auditTrail.length} entries
+                        </p>
+                      </div>
+                      {auditTrail.length > 0 && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Button variant="outline" size="sm" onClick={exportAuditJson} className="h-7 px-2 gap-1.5 text-xs">
+                            <FileJson className="w-3 h-3" />
+                            JSON
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={exportAuditMarkdown} className="h-7 px-2 gap-1.5 text-xs">
+                            <Download className="w-3 h-3" />
+                            Markdown
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   </CardHeader>
                   <CardContent className="p-4">
                     {auditTrail.length === 0 ? (
                       <p className="text-sm text-muted-foreground text-center py-8">No audit trail available. Run the pipeline to generate one.</p>
                     ) : (
-                      <div className="relative pl-4">
-                        <div className="absolute left-0 top-0 bottom-0 w-px bg-border" />
-                        <div className="space-y-6">
-                          {auditTrail.map((entry, i) => (
-                            <div key={i} className="relative">
-                              <div className="absolute -left-[1.35rem] top-1 w-3 h-3 rounded-full bg-primary/30 border-2 border-primary" />
-                              <div className="space-y-1">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-semibold text-sm font-mono text-primary">{entry.agent}</span>
-                                  <Badge variant="outline" className="text-xs">{entry.action.replace(/_/g, " ")}</Badge>
-                                  <span className="text-xs text-muted-foreground ml-auto">
-                                    {format(new Date(entry.timestamp), "HH:mm:ss")}
-                                  </span>
+                      <div className="relative pl-5">
+                        <div className="absolute left-0 top-0 bottom-0 w-px bg-border/60" />
+                        <div className="space-y-5">
+                          {auditTrail.map((entry, i) => {
+                            const statusDot = (s?: string) => {
+                              if (s === "ok") return "bg-emerald-500";
+                              if (s === "error") return "bg-red-500";
+                              if (s === "warn") return "bg-amber-500";
+                              return "bg-blue-500";
+                            };
+                            return (
+                              <div key={i} className="relative">
+                                <div className="absolute -left-[1.6rem] top-1.5 w-3 h-3 rounded-full bg-card border-2 border-primary/70" />
+                                <div className="rounded-lg border border-border/40 bg-muted/10 p-3 space-y-2">
+                                  {/* Header row */}
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-semibold text-xs font-mono text-primary">{entry.agent}</span>
+                                    <Badge variant="outline" className="text-xs py-0 h-4">{entry.action.replace(/_/g, " ")}</Badge>
+                                    <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+                                      {entry.durationMs != null && (
+                                        <span className="font-mono bg-muted/40 px-1.5 py-0.5 rounded text-[10px]">
+                                          {entry.durationMs < 1000 ? `${entry.durationMs}ms` : `${(entry.durationMs / 1000).toFixed(1)}s`}
+                                        </span>
+                                      )}
+                                      <span>{format(new Date(entry.timestamp), "HH:mm:ss")}</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Decision + rationale */}
+                                  <p className="text-sm font-medium leading-snug">{entry.decision}</p>
+                                  <p className="text-xs text-muted-foreground leading-relaxed">{entry.rationale}</p>
+
+                                  {/* Detail rows */}
+                                  {entry.details && entry.details.length > 0 && (
+                                    <div className="mt-2 space-y-0.5 border-t border-border/30 pt-2">
+                                      {entry.details.map((d, di) => (
+                                        <div key={di} className="flex items-start gap-2 text-xs py-0.5">
+                                          <div className={`w-1.5 h-1.5 rounded-full mt-1 shrink-0 ${statusDot(d.status)}`} />
+                                          <span className="text-muted-foreground shrink-0 min-w-[120px] max-w-[160px] font-mono text-[10px] leading-relaxed">{d.label}</span>
+                                          <span className="text-foreground/80 break-words min-w-0 leading-relaxed">{d.value}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {/* Per-entry note */}
+                                  <div className="pt-1">
+                                    {editingNoteIdx === i ? (
+                                      <div className="space-y-1.5">
+                                        <Textarea
+                                          value={auditNotes[i] ?? ""}
+                                          onChange={(e) => saveAuditNote(i, e.target.value)}
+                                          placeholder="Add your annotation for this decision point..."
+                                          className="text-xs min-h-[56px] resize-none bg-background/50"
+                                          autoFocus
+                                        />
+                                        <div className="flex gap-2">
+                                          <Button size="sm" variant="outline" onClick={() => setEditingNoteIdx(null)} className="h-6 text-xs px-2">Done</Button>
+                                          {auditNotes[i] && (
+                                            <Button size="sm" variant="ghost" onClick={() => { saveAuditNote(i, ""); setEditingNoteIdx(null); }} className="h-6 text-xs px-2 text-destructive">Remove</Button>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ) : auditNotes[i] ? (
+                                      <div className="flex items-start gap-2 bg-primary/5 border border-primary/15 rounded px-2 py-1.5">
+                                        <PenLine className="w-3 h-3 text-primary/60 shrink-0 mt-0.5" />
+                                        <p className="text-xs text-muted-foreground flex-1 leading-relaxed">{auditNotes[i]}</p>
+                                        <button onClick={() => setEditingNoteIdx(i)} className="text-[10px] text-primary/50 hover:text-primary shrink-0">Edit</button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        onClick={() => setEditingNoteIdx(i)}
+                                        className="flex items-center gap-1 text-[10px] text-muted-foreground/40 hover:text-primary/60 transition-colors"
+                                      >
+                                        <PenLine className="w-2.5 h-2.5" />
+                                        Add annotation
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                                <p className="text-sm font-medium">{entry.decision}</p>
-                                <p className="text-xs text-muted-foreground">{entry.rationale}</p>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}

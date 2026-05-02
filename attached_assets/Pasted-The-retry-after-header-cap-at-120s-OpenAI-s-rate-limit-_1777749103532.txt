@@ -1,0 +1,25 @@
+The retry-after header cap at 120s. OpenAI's rate limit retry-after headers are usually 20-60 seconds. The 120s cap is a safety measure for unusually long rate limit windows. Verify the cap is applied correctly — if the header says retry-after: 150, the system should wait 120s, not 150s, and should surface this to the user as "resuming in 120s" not "resuming in 150s." The displayed countdown should match the actual wait.
+The AgentTimeoutError on second timeout. When the second timeout fires, the route handler catches it and sends a clean user message. Verify the AbortController from the retry attempt is also properly aborted when the second timeout fires. If the first aborted call's promise is still dangling somewhere, you could have a memory leak or a ghost SSE emission after the error card is shown.
+The countdown timer self-propagation. A countdown that ticks every second using setTimeout inside a React component needs to be cleared on unmount and on the clearing triggers (pipeline_done, error, agent_start). If the timer isn't cleared before the component unmounts, it will try to call setState on an unmounted component. Verify the cleanup function in the useEffect that starts the timer clears the setTimeout reference.
+Zero raw output in all error paths. The route handler was fixed, but verify the SSE error event also doesn't include any envelope fields that accidentally carry structured data. The event should be exactly:
+{ type: "error", content: "Plain English sentence." }
+Nothing else. No agent, no rawOutput, no zodErrors. If any other fields are present, detail.tsx might not render them but a developer inspecting the SSE stream in DevTools will see them — and a judge who opens DevTools will too.
+
+One Final Check Before Tomorrow
+Run this sequence end-to-end on your demo database:
+Submit this bug:
+Users are randomly logged out after approximately 15 minutes 
+even though session timeout is configured to 24 hours. 
+Stack trace from Sentry:
+JsonWebTokenError: invalid signature
+    at /app/middleware/auth.js:23:15
+Verify the following in order:
+
+Confidence score is above 70 (has stack trace +25, expected behavior +15, frequency +15 minimum)
+Correlation fires against the auth seed entry (shares session, token, authentication keywords)
+Agent 1 through 4 complete with green verified badges
+Syntax validator shows verified on the generated test code
+Flow diagram renders with a red failure node at the JWT verification step and at least one eliminated hypothesis branch
+Audit trail shows every agent decision including any retries
+
+If that full sequence works on your demo database with the seed data in place — you're ready.

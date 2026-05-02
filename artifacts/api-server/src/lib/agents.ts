@@ -51,12 +51,20 @@ export type AgentEvent = {
   content: string;
 };
 
+export type AuditDetail = {
+  label: string;
+  value: string;
+  status?: "ok" | "warn" | "info" | "error";
+};
+
 export type AuditEntry = {
   timestamp: string;
   agent: string;
   action: string;
   decision: string;
   rationale: string;
+  durationMs?: number;
+  details?: AuditDetail[];
 };
 
 export type ConfidenceBreakdown = {
@@ -288,8 +296,12 @@ export async function runBugReproductionPipeline(
     ? `\n\nRelevant code context:\n\`\`\`\n${codeContext}\n\`\`\``
     : "";
   const auditTrail: AuditEntry[] = [];
+  const pipelineStartMs = Date.now();
+  const fmtMs = (ms: number) =>
+    ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 
   // ── Agent 1: Entity Extraction ────────────────────────────────────────────
+  const t0_entity = Date.now();
   const entityData: EntityExtractionOutput = await runValidatedAgent(
     "Entity Extraction Agent",
     EntityExtractionSchema,
@@ -313,12 +325,38 @@ Rules:
     onEvent
   );
 
+  const entityMs = Date.now() - t0_entity;
   auditTrail.push({
     timestamp: new Date().toISOString(),
     agent: "Entity Extraction Agent",
     action: "extracted_entities",
+    durationMs: entityMs,
     decision: `Extracted entities: component="${entityData.component}", trigger="${entityData.triggerAction}", frequency=${entityData.frequency}, ${entityData.errorMessages.length} error message(s)`,
     rationale: `Processed ${sourceLabel} to identify all key debugging signals. Entity schema validated before passing to Hypothesis Generator.`,
+    details: [
+      { label: "Component", value: entityData.component, status: "ok" },
+      { label: "Trigger action", value: entityData.triggerAction, status: "ok" },
+      { label: "Expected behavior", value: entityData.expectedBehavior, status: "ok" },
+      { label: "Actual behavior (bug)", value: entityData.actualBehavior, status: "error" },
+      { label: "Frequency", value: entityData.frequency, status: "info" },
+      {
+        label: "Error messages",
+        value: entityData.errorMessages.length > 0 ? entityData.errorMessages.join(" | ") : "None found in input",
+        status: entityData.errorMessages.length > 0 ? "ok" : "warn",
+      },
+      ...(entityData.environment.os
+        ? [{ label: "Environment — OS", value: entityData.environment.os, status: "info" as const }]
+        : [{ label: "Environment — OS", value: "Not specified", status: "warn" as const }]),
+      ...(entityData.environment.runtime
+        ? [{ label: "Environment — Runtime", value: entityData.environment.runtime, status: "info" as const }]
+        : [{ label: "Environment — Runtime", value: "Not specified", status: "warn" as const }]),
+      ...(entityData.environment.version
+        ? [{ label: "Environment — Version", value: entityData.environment.version, status: "info" as const }]
+        : []),
+      ...(entityData.additionalContext
+        ? [{ label: "Additional context", value: entityData.additionalContext, status: "info" as const }]
+        : []),
+    ],
   });
 
   // ── Deterministic confidence scoring (runs immediately after entity extraction) ──
@@ -333,13 +371,23 @@ Rules:
     timestamp: new Date().toISOString(),
     agent: "Confidence Scorer",
     action: "calculated_score",
-    decision: `Deterministic score: ${scored.score}/100. Factors awarded: ${Object.values(scored.rubric).filter(v => v > 0).length}/7.`,
-    rationale: `Score computed from rubric — not LLM-generated. Rubric:\n${rubricLines}`,
+    decision: `Deterministic score: ${scored.score}/100. Factors awarded: ${Object.values(scored.rubric).filter(v => v > 0).length}/${Object.keys(scored.rubric).length}.`,
+    rationale: `Score computed from rubric — not LLM-generated. Every factor is verifiable from the raw input alone.`,
+    details: [
+      ...(Object.keys(scored.rubric) as (keyof typeof scored.rubric)[]).map((k) => ({
+        label: RUBRIC_LABELS[k as keyof typeof RUBRIC_LABELS] ?? k,
+        value: `+${scored.rubric[k]} / ${RUBRIC_WEIGHTS[k as keyof typeof RUBRIC_WEIGHTS]}pts`,
+        status: (scored.rubric[k] > 0 ? "ok" : "warn") as "ok" | "warn",
+      })),
+      { label: "Total score", value: `${scored.score}/100`, status: (scored.score >= 70 ? "ok" : scored.score >= 40 ? "warn" : "error") as "ok" | "warn" | "error" },
+      ...scored.missing.map((m) => ({ label: "Missing signal", value: m, status: "warn" as const })),
+    ],
   });
 
   // ── Agent 2: Hypothesis Generator ────────────────────────────────────────
   //    Receives validated EntityExtractionOutput — never runs on unvalidated entity data
 
+  const t0_hyp = Date.now();
   const hypothesesData: HypothesesOutput = await runValidatedAgent(
     "Hypothesis Generator",
     HypothesesSchema,
@@ -358,6 +406,7 @@ Rules:
     onEvent
   );
 
+  const hypMs = Date.now() - t0_hyp;
   const retained = hypothesesData.hypotheses.filter((h) => h.status === "retained").length;
   const eliminated = hypothesesData.hypotheses.filter((h) => h.status === "eliminated").length;
 
@@ -365,14 +414,32 @@ Rules:
     timestamp: new Date().toISOString(),
     agent: "Hypothesis Generator",
     action: "generated_hypotheses",
-    decision: `Generated ${hypothesesData.hypotheses.length} hypotheses: ${retained} retained, ${eliminated} eliminated. Top hypothesis: "${hypothesesData.hypotheses[0]?.title}" (${hypothesesData.hypotheses[0]?.likelihood} likelihood)`,
+    durationMs: hypMs,
+    decision: `Generated ${hypothesesData.hypotheses.length} hypotheses: ${retained} retained, ${eliminated} eliminated. Top: "${hypothesesData.hypotheses[0]?.title}" (${hypothesesData.hypotheses[0]?.likelihood} likelihood)`,
     rationale:
-      "Hypotheses ranked by likelihood using entity signals. Eliminated hypotheses contradicted by available evidence from the bug entities.",
+      "Hypotheses ranked by likelihood using entity signals. Each elimination is based on contradicting evidence derived directly from the extracted entities.",
+    details: hypothesesData.hypotheses.flatMap((h, idx) => [
+      {
+        label: `H${idx + 1}: ${h.title}`,
+        value: `${h.likelihood.toUpperCase()} likelihood — ${h.status === "retained" ? "✓ RETAINED" : "✗ ELIMINATED"}`,
+        status: (h.status === "retained" ? "ok" : "warn") as "ok" | "warn",
+      },
+      { label: `  Mechanism`, value: h.mechanism, status: "info" as const },
+      {
+        label: h.status === "eliminated" ? `  Eliminated because` : `  Retained because`,
+        value: h.statusReason,
+        status: (h.status === "retained" ? "ok" : "error") as "ok" | "error",
+      },
+      ...(h.refutingEvidence.length > 0
+        ? [{ label: `  Refuting evidence`, value: h.refutingEvidence.join("; "), status: "warn" as const }]
+        : []),
+    ]),
   });
 
   // ── Agent 3: Step Validator ───────────────────────────────────────────────
   //    Receives validated EntityExtractionOutput + HypothesesOutput
 
+  const t0_step = Date.now();
   const stepData: StepValidationOutput = await runValidatedAgent(
     "Step Validator",
     StepValidationSchema,
@@ -396,18 +463,50 @@ Rules:
     onEvent
   );
 
+  const stepMs = Date.now() - t0_step;
   auditTrail.push({
     timestamp: new Date().toISOString(),
     agent: "Step Validator",
     action: "validated_steps",
-    decision: `Generated ${stepData.steps.length} reproduction steps with ${stepData.confidenceRating}/10 confidence. ${stepData.prerequisites.length} prerequisite(s), ${stepData.validationNotes.length} validation note(s).`,
+    durationMs: stepMs,
+    decision: `Generated ${stepData.steps.length} reproduction steps with ${stepData.confidenceRating}/10 confidence. ${stepData.prerequisites.length} prerequisite(s).`,
     rationale:
-      "Steps derived from highest-likelihood hypothesis. Validation notes cover alternative paths to rule out remaining hypotheses.",
+      "Steps derived from the highest-likelihood retained hypothesis. Validation notes cover how to rule out each alternative.",
+    details: [
+      ...stepData.prerequisites.map((p, i) => ({
+        label: `Prerequisite ${i + 1}`,
+        value: p,
+        status: "info" as const,
+      })),
+      ...stepData.environmentConfig.map((e, i) => ({
+        label: `Environment config ${i + 1}`,
+        value: e,
+        status: "info" as const,
+      })),
+      ...stepData.steps.map((s) => ({
+        label: `Step ${s.number}`,
+        value: s.action + (s.expectedOutcome ? ` → ${s.expectedOutcome}` : ""),
+        status: "ok" as const,
+      })),
+      { label: "Expected result", value: stepData.expectedResult, status: "ok" as const },
+      { label: "Actual result (bug)", value: stepData.actualResult, status: "error" as const },
+      {
+        label: "Reproduction confidence",
+        value: `${stepData.confidenceRating}/10`,
+        status: (stepData.confidenceRating >= 7 ? "ok" : stepData.confidenceRating >= 5 ? "warn" : "error") as "ok" | "warn" | "error",
+      },
+      ...stepData.validationNotes.map((n, i) => ({
+        label: `Validation note ${i + 1}`,
+        value: n,
+        status: "info" as const,
+      })),
+    ],
   });
 
   // ── Agent 4: Test Writer ──────────────────────────────────────────────────
   //    Receives validated EntityExtractionOutput + StepValidationOutput
 
+  const t0_test = Date.now();
   const testData: TestWriterOutput = await runValidatedAgent(
     "Test Writer",
     TestWriterSchema,
@@ -432,13 +531,25 @@ Rules:
     onEvent
   );
 
+  const testMs = Date.now() - t0_test;
   auditTrail.push({
     timestamp: new Date().toISOString(),
     agent: "Test Writer",
     action: "generated_tests",
+    durationMs: testMs,
     decision: `Generated ${testData.framework} (${testData.language}) test covering ${testData.coverageAreas.length} area(s): ${testData.coverageAreas.join(", ")}`,
     rationale:
-      "Test assertions designed to fail with the bug present and pass when the root cause is fixed. Coverage aligns with highest-likelihood hypothesis.",
+      "Test assertions designed to fail with the bug present and pass when the root cause is fixed. Coverage aligns with the highest-likelihood retained hypothesis.",
+    details: [
+      { label: "Framework detected", value: testData.framework, status: "ok" as const },
+      { label: "Language", value: testData.language, status: "ok" as const },
+      { label: "Description", value: testData.description, status: "info" as const },
+      ...testData.coverageAreas.map((area, i) => ({
+        label: `Coverage area ${i + 1}`,
+        value: area,
+        status: "ok" as const,
+      })),
+    ],
   });
 
   // ── Syntax Validator (runs after Test Writer, before Synthesizer) ─────────
@@ -537,15 +648,28 @@ If you return raw code instead of a JSON object, the response will be rejected.`
       agent: "Syntax Validator",
       action: "syntax_correction",
       decision: testSyntaxStatus === "verified"
-        ? "Syntax corrected and verified on retry"
+        ? "Syntax error detected and corrected on retry"
         : "Syntax error persisted after one correction attempt — warning issued",
       rationale: `Original error: ${syntaxResult.error ?? "unknown"}${syntaxResult.line ? ` at line ${syntaxResult.line}` : ""}`,
+      details: [
+        {
+          label: "Original error",
+          value: `${syntaxResult.error ?? "unknown"}${syntaxResult.line ? ` (line ${syntaxResult.line})` : ""}`,
+          status: "error" as const,
+        },
+        {
+          label: "Correction outcome",
+          value: testSyntaxStatus === "verified" ? "Corrected and re-verified successfully" : "Correction still had issues — manual review needed",
+          status: (testSyntaxStatus === "verified" ? "ok" : "warn") as "ok" | "warn",
+        },
+      ],
     });
   }
 
   // ── Agent 5: Analysis Synthesizer ─────────────────────────────────────────
   //    Receives all four prior validated outputs
 
+  const t0_synth = Date.now();
   const synthData: SynthesizerOutput = await runValidatedAgent(
     "Analysis Synthesizer",
     SynthesizerSchema,
@@ -578,12 +702,23 @@ Test framework: ${finalTestData.framework} — coverage: ${finalTestData.coverag
     onEvent
   );
 
+  const synthMs = Date.now() - t0_synth;
+  const totalMs = Date.now() - pipelineStartMs;
   auditTrail.push({
     timestamp: new Date().toISOString(),
     agent: "Analysis Synthesizer",
     action: "synthesized_analysis",
-    decision: `Deterministic confidence: ${scored.score}%, severity: ${synthData.severity}. Generated flow diagram and ${synthData.clarifyingQuestions.length} clarifying questions.`,
-    rationale: `Qualitative evidence: ${synthData.confidenceEvidence.slice(0, 2).join("; ")}. Severity based on user impact and component criticality.`,
+    durationMs: synthMs,
+    decision: `Confidence: ${scored.score}%, severity: ${synthData.severity}. Flow diagram: ${synthData.diagram.nodes.length} nodes, ${synthData.diagram.edges.length} edges. ${synthData.clarifyingQuestions.length} clarifying questions.`,
+    rationale: `Severity: ${synthData.severityReason}`,
+    details: [
+      { label: "Severity", value: `${synthData.severity.toUpperCase()} — ${synthData.severityReason}`, status: (synthData.severity === "critical" ? "error" : synthData.severity === "high" ? "warn" : "ok") as "ok" | "warn" | "error" },
+      { label: "Confidence score", value: `${scored.score}/100`, status: (scored.score >= 70 ? "ok" : scored.score >= 40 ? "warn" : "error") as "ok" | "warn" | "error" },
+      { label: "Flow diagram", value: `${synthData.diagram.nodes.length} nodes · ${synthData.diagram.edges.length} edges · failure at "${synthData.diagram.failureNodeId}"`, status: "info" as const },
+      ...synthData.confidenceEvidence.map((e, i) => ({ label: `Evidence ${i + 1}`, value: e, status: "ok" as const })),
+      ...synthData.confidenceAssumptions.map((a, i) => ({ label: `Assumption ${i + 1}`, value: a, status: "warn" as const })),
+      { label: "Total pipeline duration", value: fmtMs(totalMs), status: "info" as const },
+    ],
   });
 
   logger.info(
