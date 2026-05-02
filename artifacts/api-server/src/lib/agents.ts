@@ -541,11 +541,20 @@ Rules:
     agent: "Test Writer",
     action: "generated_tests",
     durationMs: testMs,
-    decision: `Generated ${testData.framework} (${testData.language}) test covering ${testData.coverageAreas.length} area(s): ${testData.coverageAreas.join(", ")}`,
+    decision: `Generated ${testData.framework} (${testData.language}) test${frameworkHint ? ` [override: ${frameworkHint}]` : ""} covering ${testData.coverageAreas.length} area(s): ${testData.coverageAreas.join(", ")}`,
     rationale:
       "Test assertions designed to fail with the bug present and pass when the root cause is fixed. Coverage aligns with the highest-likelihood retained hypothesis.",
     details: [
-      { label: "Framework detected", value: testData.framework, status: "ok" as const },
+      {
+        label: frameworkHint ? "Framework (override)" : "Framework detected",
+        value: testData.framework,
+        status: "ok" as const,
+      },
+      {
+        label: "framework source",
+        value: frameworkHint ? "user override" : "auto-detected",
+        status: (frameworkHint ? "info" : "ok") as "info" | "ok",
+      },
       { label: "Language", value: testData.language, status: "ok" as const },
       { label: "Description", value: testData.description, status: "info" as const },
       ...testData.coverageAreas.map((area, i) => ({
