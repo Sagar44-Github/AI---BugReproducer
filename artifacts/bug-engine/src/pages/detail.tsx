@@ -13,8 +13,10 @@ import {
   ShieldAlert, ShieldCheck, ShieldQuestion, Shield,
   ChevronDown, ChevronUp, Users, MessageSquare, Clock,
   Network, CheckCheck, XCircle, HelpCircle, PenLine,
-  RefreshCw, Send, Bot, Download, FileJson
+  RefreshCw, Send, Bot, Download, FileJson,
+  Eye, EyeOff, Play, Layers, Terminal
 } from "lucide-react";
+import { useNotifications } from "@/contexts/notifications";
 import { format } from "date-fns";
 
 import { Button } from "@/components/ui/button";
@@ -446,6 +448,41 @@ export function AnalysisDetail() {
   );
   const [isRegenerating, setIsRegenerating] = useState(false);
 
+  // Notifications
+  const { addNotification } = useNotifications();
+
+  // Past-run toggle & simplified view
+  const [showPastRun, setShowPastRun] = useState(false);
+  const [simpleView, setSimpleView] = useState(false);
+
+  // Inline code runner
+  const [runningCode, setRunningCode] = useState(false);
+  const [codeRunResult, setCodeRunResult] = useState<{
+    success: boolean;
+    tests: { name: string; status: string; error?: string; reason?: string }[];
+    error?: string;
+    duration: number;
+  } | null>(null);
+
+  const runTestCode = async () => {
+    if (!analysis?.testCode || runningCode) return;
+    setRunningCode(true);
+    setCodeRunResult(null);
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/tools/run-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: analysis.testCode, language: detectedLanguage || "TypeScript" }),
+      });
+      const data = await res.json() as { success: boolean; tests: { name: string; status: string; error?: string }[]; error?: string; duration: number };
+      setCodeRunResult(data);
+    } catch {
+      setCodeRunResult({ success: false, tests: [], error: "Network error", duration: 0 });
+    } finally {
+      setRunningCode(false);
+    }
+  };
+
   const FRAMEWORK_OPTIONS = [
     { value: "Jest",       desc: "Unit/integration · JavaScript" },
     { value: "Vitest",     desc: "Unit/integration · Vite" },
@@ -679,6 +716,7 @@ export function AnalysisDetail() {
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let exitedNormally = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -694,21 +732,35 @@ export function AnalysisDetail() {
               const event: AgentEvent = JSON.parse(line.slice(6));
 
               if (event.type === "pipeline_done") {
+                exitedNormally = true;
                 queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(id) });
                 setIsRunning(false);
                 setCorrelationsFetched(false);
                 setRateLimitInfo(null);
                 setTimeoutMessage(null);
                 toast({ title: "Pipeline Complete", description: "Bug reproduction analysis finished successfully." });
+                addNotification({
+                  type: "pipeline_complete",
+                  title: "Pipeline complete",
+                  analysisId: Number(id),
+                  analysisTitle: analysis?.title ?? `Analysis #${id}`,
+                });
                 break;
               }
 
               if (event.type === "error") {
+                exitedNormally = true;
                 setPipelineError(event.content);
                 setRateLimitInfo(null);
                 setTimeoutMessage(null);
                 setIsRunning(false);
                 queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(id) });
+                addNotification({
+                  type: "pipeline_failed",
+                  title: "Pipeline failed",
+                  analysisId: Number(id),
+                  analysisTitle: analysis?.title ?? `Analysis #${id}`,
+                });
                 break;
               }
 
@@ -771,6 +823,22 @@ export function AnalysisDetail() {
             } catch { /* ignore parse errors */ }
           }
         }
+        // Break the outer while loop once a terminal event was processed
+        if (exitedNormally) break;
+      }
+
+      // Guard: if the SSE stream ended without a pipeline_done/error event
+      // (e.g. dropped connection, proxy timeout), reset the running state
+      if (!exitedNormally) {
+        setIsRunning(false);
+        setRateLimitInfo(null);
+        setTimeoutMessage(null);
+        queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(id) });
+        toast({
+          variant: "destructive",
+          title: "Connection interrupted",
+          description: "The pipeline stream was cut short. Check the result status and re-run if needed.",
+        });
       }
     } catch (err: unknown) {
       const e = err as { name?: string; message?: string };
@@ -1075,6 +1143,75 @@ export function AnalysisDetail() {
         </CardContent>
       </Card>
 
+      {/* Past Pipeline Run — audit-trail cards, shown when not actively running */}
+      {hasResults && !isRunning && agentList.length === 0 && auditTrail.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => setShowPastRun(v => !v)}
+              className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Layers className="w-4 h-4 text-primary/60" />
+              Agent Pipeline Run
+              <span className="text-xs font-mono text-muted-foreground/60 ml-1">({auditTrail.length} agents)</span>
+              {showPastRun
+                ? <ChevronUp className="w-3.5 h-3.5" />
+                : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+          {showPastRun && (
+            <div className="grid gap-2">
+              {auditTrail.map((entry, i) => (
+                <div key={i} className="rounded-xl border border-border/40 bg-card/60 overflow-hidden">
+                  <div className="flex items-start gap-3 px-4 py-3">
+                    <div className="mt-0.5 shrink-0 w-6 h-6 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold font-mono">{entry.agent}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary/80 border border-primary/20 font-mono uppercase tracking-wide">
+                            {entry.action.replace(/_/g, " ")}
+                          </span>
+                        </div>
+                        {entry.durationMs !== undefined && (
+                          <span className="text-[11px] font-mono text-muted-foreground/50 flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {entry.durationMs < 1000 ? `${entry.durationMs}ms` : `${(entry.durationMs / 1000).toFixed(1)}s`}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">{entry.decision}</p>
+                      {entry.details && entry.details.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                          {entry.details.slice(0, 5).map((d, j) => (
+                            <span key={j} className="flex items-center gap-1 text-[11px]">
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                d.status === "ok" ? "bg-emerald-400" :
+                                d.status === "error" ? "bg-destructive" :
+                                d.status === "warn" ? "bg-amber-400" : "bg-muted-foreground/40"
+                              }`} />
+                              <span className="text-muted-foreground/60">{d.label}:</span>
+                              <span className="text-foreground/70 truncate max-w-[200px]">{d.value}</span>
+                            </span>
+                          ))}
+                          {entry.details.length > 5 && (
+                            <span className="text-[11px] text-muted-foreground/40">
+                              +{entry.details.length - 5} more
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Live Pipeline View */}
       {(isRunning || agentList.length > 0) && (
         <div className="space-y-4">
@@ -1283,10 +1420,24 @@ export function AnalysisDetail() {
       {/* Final Results */}
       {hasResults && !isRunning && (
         <div className="space-y-4 animate-in slide-in-from-bottom-8 duration-700">
-          <h2 className="text-lg font-bold flex items-center gap-2 mt-8">
-            <FileText className="w-5 h-5 text-primary" />
-            Analysis Results
-          </h2>
+          <div className="flex items-center justify-between mt-8 flex-wrap gap-2">
+            <h2 className="text-lg font-bold flex items-center gap-2">
+              <FileText className="w-5 h-5 text-primary" />
+              Analysis Results
+            </h2>
+            <button
+              onClick={() => setSimpleView(v => !v)}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors font-medium ${
+                simpleView
+                  ? "bg-primary/15 text-primary border-primary/30"
+                  : "text-muted-foreground border-border/60 hover:text-foreground hover:border-border"
+              }`}
+              title={simpleView ? "Switch to technical view" : "Switch to simplified non-technical view"}
+            >
+              {simpleView ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              {simpleView ? "Technical view" : "Simplified view"}
+            </button>
+          </div>
 
           <Tabs defaultValue="steps" className="w-full">
             <TabsList className="w-full grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 bg-card border border-border/50 h-auto p-1 gap-1">
@@ -1305,11 +1456,54 @@ export function AnalysisDetail() {
             <div className="mt-4">
               <TabsContent value="steps" className="m-0">
                 <Card className="border-border/50 bg-card shadow-sm">
-                  <CardContent className="p-0">
-                    {analysis.reproductionSteps
-                      ? <StructuredReproSteps raw={analysis.reproductionSteps} />
-                      : <div className="p-6 text-sm text-muted-foreground text-center">No reproduction steps generated.</div>}
-                  </CardContent>
+                  {simpleView && analysis.reproductionSteps ? (
+                    <CardContent className="p-5">
+                      {(() => {
+                        try {
+                          const d = JSON.parse(analysis.reproductionSteps) as { steps?: { number: number; action: string }[]; prerequisites?: string[]; expectedResult?: string; actualResult?: string; confidenceRating?: number };
+                          return (
+                            <div className="space-y-4">
+                              {d.prerequisites && d.prerequisites.length > 0 && (
+                                <div>
+                                  <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-2">Before you start</p>
+                                  <ul className="space-y-1">{d.prerequisites.map((p, i) => <li key={i} className="text-sm text-foreground/80 flex gap-2"><span className="text-primary/60">→</span>{p}</li>)}</ul>
+                                </div>
+                              )}
+                              <div>
+                                <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-2">Steps to reproduce</p>
+                                <ol className="space-y-2">
+                                  {(d.steps ?? []).map(s => (
+                                    <li key={s.number} className="flex gap-3 text-sm">
+                                      <span className="w-6 h-6 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xs font-bold shrink-0">{s.number}</span>
+                                      <span className="text-foreground/80 pt-0.5">{s.action}</span>
+                                    </li>
+                                  ))}
+                                </ol>
+                              </div>
+                              {d.actualResult && (
+                                <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+                                  <p className="text-xs font-semibold text-destructive mb-1">What goes wrong</p>
+                                  <p className="text-sm text-foreground/80">{d.actualResult}</p>
+                                </div>
+                              )}
+                              {d.expectedResult && (
+                                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+                                  <p className="text-xs font-semibold text-emerald-400 mb-1">What should happen</p>
+                                  <p className="text-sm text-foreground/80">{d.expectedResult}</p>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        } catch { return <StructuredReproSteps raw={analysis.reproductionSteps!} />; }
+                      })()}
+                    </CardContent>
+                  ) : (
+                    <CardContent className="p-0">
+                      {analysis.reproductionSteps
+                        ? <StructuredReproSteps raw={analysis.reproductionSteps} />
+                        : <div className="p-6 text-sm text-muted-foreground text-center">No reproduction steps generated.</div>}
+                    </CardContent>
+                  )}
                 </Card>
               </TabsContent>
 
@@ -1392,9 +1586,111 @@ export function AnalysisDetail() {
                         </span>
                       </div>
                     )}
-                    <div className="bg-[#0a0a0a] rounded-b-lg p-6 font-mono text-sm whitespace-pre-wrap text-blue-300">
-                      {analysis.testCode || "// No test code generated."}
-                    </div>
+                    {simpleView ? (
+                      <div className="p-5 space-y-3">
+                        {(() => {
+                          const entry = auditTrail.find(e => e.agent === "Test Writer");
+                          const desc = entry?.details?.find(d => d.label === "Description")?.value;
+                          const areas = entry?.details?.filter(d => d.label.startsWith("Coverage area")).map(d => d.value) ?? [];
+                          return (
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {detectedFramework && <span className="px-2 py-1 rounded bg-primary/10 text-primary text-xs font-mono border border-primary/20">{detectedFramework}</span>}
+                                {detectedLanguage && <span className="px-2 py-1 rounded bg-muted/50 text-muted-foreground text-xs font-mono">{detectedLanguage}</span>}
+                              </div>
+                              {desc && <p className="text-sm text-foreground/80">{desc}</p>}
+                              {areas.length > 0 && (
+                                <div>
+                                  <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-2">What this test covers</p>
+                                  <ul className="space-y-1">{areas.map((a, i) => <li key={i} className="flex gap-2 text-sm text-foreground/80"><CheckCheck className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />{a}</li>)}</ul>
+                                </div>
+                              )}
+                              <details className="group">
+                                <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground font-mono select-none">View full test code</summary>
+                                <div className="mt-2 bg-[#0a0a0a] rounded-lg p-4 font-mono text-xs whitespace-pre-wrap text-blue-300 overflow-x-auto">
+                                  {analysis.testCode}
+                                </div>
+                              </details>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    ) : (
+                      <div className="bg-[#0a0a0a] rounded-b-lg p-6 font-mono text-sm whitespace-pre-wrap text-blue-300">
+                        {analysis.testCode || "// No test code generated."}
+                      </div>
+                    )}
+
+                    {/* Inline code runner */}
+                    {analysis.testCode && (
+                      <div className="border-t border-border/50">
+                        <div className="px-4 py-3 flex items-center justify-between bg-muted/10">
+                          <div className="flex items-center gap-2">
+                            <Terminal className="w-4 h-4 text-primary/70" />
+                            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Sandbox Runner</span>
+                            <span className="text-[10px] text-muted-foreground/50 font-mono">Node.js · Jest shim</span>
+                          </div>
+                          <button
+                            onClick={runTestCode}
+                            disabled={runningCode}
+                            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
+                          >
+                            {runningCode ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                            {runningCode ? "Running…" : "Run tests"}
+                          </button>
+                        </div>
+                        {codeRunResult && (
+                          <div className="px-4 pb-4 pt-2 space-y-2">
+                            <div className="flex items-center justify-between text-xs">
+                              <div className="flex items-center gap-3">
+                                {codeRunResult.tests.filter(t => t.status === "pass").length > 0 && (
+                                  <span className="flex items-center gap-1 text-emerald-400 font-mono">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    {codeRunResult.tests.filter(t => t.status === "pass").length} passed
+                                  </span>
+                                )}
+                                {codeRunResult.tests.filter(t => t.status === "fail").length > 0 && (
+                                  <span className="flex items-center gap-1 text-destructive font-mono">
+                                    <XCircle className="w-3 h-3" />
+                                    {codeRunResult.tests.filter(t => t.status === "fail").length} failed
+                                  </span>
+                                )}
+                                {codeRunResult.tests.filter(t => t.status === "skip").length > 0 && (
+                                  <span className="flex items-center gap-1 text-amber-400 font-mono">
+                                    <AlertCircle className="w-3 h-3" />
+                                    {codeRunResult.tests.filter(t => t.status === "skip").length} skipped
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-muted-foreground font-mono">{codeRunResult.duration}ms</span>
+                            </div>
+
+                            {codeRunResult.error && (
+                              <div className="rounded bg-destructive/10 border border-destructive/20 px-3 py-2">
+                                <p className="text-xs font-mono text-destructive whitespace-pre-wrap">{codeRunResult.error}</p>
+                              </div>
+                            )}
+
+                            {codeRunResult.tests.map((t, i) => (
+                              <div key={i} className={`flex items-start gap-2 px-3 py-2 rounded text-xs font-mono border ${
+                                t.status === "pass" ? "bg-emerald-500/5 border-emerald-500/15 text-emerald-300"
+                                : t.status === "fail" ? "bg-destructive/5 border-destructive/15 text-destructive"
+                                : "bg-amber-500/5 border-amber-500/15 text-amber-300"
+                              }`}>
+                                <span className="shrink-0 mt-0.5">
+                                  {t.status === "pass" ? "✓" : t.status === "fail" ? "✗" : "○"}
+                                </span>
+                                <div>
+                                  <span>{t.name}</span>
+                                  {t.error && <p className="text-destructive/80 mt-0.5 text-[11px] whitespace-pre-wrap">{t.error}</p>}
+                                  {t.reason && <p className="text-amber-300/70 mt-0.5 text-[11px]">{t.reason}</p>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -1403,7 +1699,53 @@ export function AnalysisDetail() {
                 <Card className="border-border/50 bg-card shadow-sm">
                   <CardContent className="p-6">
                     {analysis.hypotheses
-                      ? <StructuredHypotheses raw={analysis.hypotheses} />
+                      ? (simpleView ? (() => {
+                          try {
+                            const d = JSON.parse(analysis.hypotheses!) as { hypotheses?: { title: string; mechanism: string; likelihood: string; status: string; statusReason: string }[] };
+                            const hyps = d.hypotheses ?? [];
+                            const retained = hyps.filter(h => h.status === "retained");
+                            const eliminated = hyps.filter(h => h.status === "eliminated");
+                            return (
+                              <div className="space-y-4">
+                                {retained.length > 0 && (
+                                  <div>
+                                    <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-3">Most likely causes</p>
+                                    <div className="space-y-3">
+                                      {retained.map((h, i) => (
+                                        <div key={i} className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
+                                          <div className="flex items-center justify-between gap-2 mb-1">
+                                            <span className="font-semibold text-sm">{h.title}</span>
+                                            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
+                                              h.likelihood === "high" ? "bg-red-500/10 text-red-400" :
+                                              h.likelihood === "medium" ? "bg-amber-500/10 text-amber-400" :
+                                              "bg-muted/50 text-muted-foreground"
+                                            }`}>{h.likelihood} likelihood</span>
+                                          </div>
+                                          <p className="text-sm text-foreground/75">{h.mechanism}</p>
+                                          <p className="text-xs text-emerald-400/70 mt-2">{h.statusReason}</p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {eliminated.length > 0 && (
+                                  <details>
+                                    <summary className="text-xs text-muted-foreground hover:text-foreground cursor-pointer font-semibold">{eliminated.length} cause(s) ruled out</summary>
+                                    <div className="mt-2 space-y-2">
+                                      {eliminated.map((h, i) => (
+                                        <div key={i} className="rounded-lg border border-border/30 bg-muted/10 p-3 opacity-60">
+                                          <p className="text-sm font-medium line-through">{h.title}</p>
+                                          <p className="text-xs text-muted-foreground mt-1">{h.statusReason}</p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
+                            );
+                          } catch { return <StructuredHypotheses raw={analysis.hypotheses!} />; }
+                        })()
+                      : <StructuredHypotheses raw={analysis.hypotheses} />)
                       : <p className="text-sm text-muted-foreground text-center py-8">No hypotheses generated.</p>}
                   </CardContent>
                 </Card>
