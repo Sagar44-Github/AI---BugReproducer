@@ -1078,15 +1078,117 @@ export function AnalysisDetail() {
       {/* Live Pipeline View */}
       {(isRunning || agentList.length > 0) && (
         <div className="space-y-4">
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <Search className="w-5 h-5 text-primary" />
-            Pipeline Execution
-          </h2>
+          {/* Animated header */}
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold flex items-center gap-2">
+              <Search className="w-5 h-5 text-primary" />
+              Pipeline Execution
+              {isRunning && (
+                <span className="flex items-center gap-1.5 ml-2 px-2 py-0.5 rounded-full bg-primary/15 border border-primary/30 text-xs font-mono text-primary animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary animate-ping" />
+                  LIVE
+                </span>
+              )}
+            </h2>
+            {isRunning && (
+              <span className="text-xs text-muted-foreground font-mono">
+                {agentList.filter(a => a.status === "completed").length} / {Math.max(agentList.length, 7)} agents
+              </span>
+            )}
+          </div>
+
+          {/* Step progress track */}
+          {isRunning && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="p-4 rounded-xl border border-primary/20 bg-primary/5 backdrop-blur-sm"
+            >
+              {(() => {
+                const PIPELINE_STEPS = [
+                  "Entity Extraction Agent",
+                  "Confidence Scorer",
+                  "Hypothesis Generator",
+                  "Step Validator",
+                  "Test Writer",
+                  "Syntax Validator",
+                  "Analysis Synthesizer",
+                ];
+                const completedCount = agentList.filter(a => a.status === "completed").length;
+                const runningAgent = agentList.find(a => a.status === "running");
+                const progressPct = Math.round((completedCount / PIPELINE_STEPS.length) * 100);
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span className="font-mono">{runningAgent ? `Running: ${runningAgent.name}` : "Starting pipeline..."}</span>
+                      <span className="font-mono font-semibold text-primary">{progressPct}%</span>
+                    </div>
+                    <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                      <motion.div
+                        className="h-full bg-gradient-to-r from-primary/80 to-primary rounded-full"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${progressPct}%` }}
+                        transition={{ duration: 0.5, ease: "easeOut" }}
+                      />
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {PIPELINE_STEPS.map((step, i) => {
+                        const agentState = agentList.find(a => a.name === step);
+                        const status = agentState?.status ?? "pending";
+                        return (
+                          <div key={step} className="flex items-center gap-1">
+                            <div
+                              className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                                status === "completed" ? "bg-emerald-400" :
+                                status === "running" ? "bg-primary animate-pulse ring-2 ring-primary/30" :
+                                status === "error" ? "bg-destructive" :
+                                "bg-muted-foreground/25"
+                              }`}
+                              title={step}
+                            />
+                            {i < PIPELINE_STEPS.length - 1 && (
+                              <div className={`h-px w-3 ${status === "completed" ? "bg-emerald-400/60" : "bg-muted-foreground/20"}`} />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      {PIPELINE_STEPS.map(step => {
+                        const agentState = agentList.find(a => a.name === step);
+                        const status = agentState?.status ?? "pending";
+                        return (
+                          <span
+                            key={step}
+                            className={`text-[10px] font-mono transition-colors ${
+                              status === "completed" ? "text-emerald-400" :
+                              status === "running" ? "text-primary font-bold" :
+                              status === "error" ? "text-destructive" :
+                              "text-muted-foreground/40"
+                            }`}
+                          >
+                            {step.replace(" Agent", "").replace("Analysis ", "")}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+            </motion.div>
+          )}
+
           <div className="grid gap-4">
             <AnimatePresence initial={false}>
               {agentList.map((agent) => (
                 <motion.div key={agent.name} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
-                  <Card className={`border-border/50 overflow-hidden ${agent.status === "running" ? "ring-1 ring-primary/50" : ""}`}>
+                  <Card className={`border-border/50 overflow-hidden transition-all duration-300 ${
+                    agent.status === "running"
+                      ? "ring-2 ring-primary/40 shadow-[0_0_20px_rgba(var(--primary-rgb,99,102,241),0.15)]"
+                      : agent.status === "completed"
+                        ? "ring-1 ring-emerald-500/20"
+                        : ""
+                  }`}>
                     <div className="bg-muted/30 px-4 py-3 flex items-center justify-between border-b border-border/50">
                       <div className="flex items-center gap-2 font-mono text-sm font-semibold">
                         <Code2 className="w-4 h-4 text-primary" />{agent.name}

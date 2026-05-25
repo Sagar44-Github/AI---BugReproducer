@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "wouter";
-import { ArrowLeft, Shuffle, AlertTriangle, CheckCircle } from "lucide-react";
+import { ArrowLeft, Shuffle, AlertTriangle, CheckCircle, Clock, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { useToolHistory } from "@/hooks/use-tool-history";
+import { format } from "date-fns";
 
 type FlakyTest = {
   testName: string;
@@ -55,6 +57,10 @@ export function FlakyDetectorPage() {
   const [language, setLanguage] = useState("JavaScript/TypeScript");
   const [result, setResult] = useState<FlakyDetectorResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const { history, addEntry, clearHistory } = useToolHistory<FlakyDetectorResult>("flaky-detector");
 
   const handleAnalyze = async () => {
     if (!testCode.trim()) {
@@ -66,7 +72,7 @@ export function FlakyDetectorPage() {
     setResult(null);
 
     try {
-      const res = await fetch("/api/tools/flaky-detector", {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/tools/flaky-detector`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ testCode, language }),
@@ -75,6 +81,7 @@ export function FlakyDetectorPage() {
       if (!res.ok) throw new Error("Request failed");
       const data = await res.json() as FlakyDetectorResult;
       setResult(data);
+      addEntry(`${language} — ${data.flakyTests.length} flaky test${data.flakyTests.length !== 1 ? "s" : ""} · ${data.overallRisk} risk`, data);
     } catch {
       toast({ variant: "destructive", title: "Analysis failed", description: "Could not analyze test suite. Try again." });
     } finally {
@@ -82,26 +89,86 @@ export function FlakyDetectorPage() {
     }
   };
 
+  const restoreFromHistory = (entry: { result: FlakyDetectorResult }) => {
+    setResult(entry.result);
+    setShowHistory(false);
+  };
+
   const overallCfg = result ? riskConfig[result.overallRisk] : null;
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center gap-3">
-        <Link href="/dashboard">
-          <Button variant="ghost" size="sm" className="gap-2">
-            <ArrowLeft className="w-4 h-4" /> Back
-          </Button>
-        </Link>
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Shuffle className="w-6 h-6 text-primary" />
-            Flaky Test Detector
-          </h1>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            Paste your test suite — AI identifies which tests are flaky and explains exactly why.
-          </p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Link href="/dashboard">
+            <Button variant="ghost" size="sm" className="gap-2">
+              <ArrowLeft className="w-4 h-4" /> Back
+            </Button>
+          </Link>
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <Shuffle className="w-6 h-6 text-primary" />
+              Flaky Test Detector
+            </h1>
+            <p className="text-muted-foreground text-sm mt-0.5">
+              Paste your test suite — AI identifies which tests are flaky and explains exactly why.
+            </p>
+          </div>
         </div>
+        {history.length > 0 && (
+          <Button variant="outline" size="sm" className="gap-2 shrink-0" onClick={() => setShowHistory(v => !v)}>
+            <Clock className="w-4 h-4" />
+            History ({history.length})
+          </Button>
+        )}
       </div>
+
+      {showHistory && history.length > 0 && (
+        <Card className="border-border/50">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-sm font-medium">Past Analyses</CardTitle>
+            <Button variant="ghost" size="sm" className="text-destructive h-7 px-2 gap-1.5" onClick={() => { clearHistory(); setShowHistory(false); }}>
+              <Trash2 className="w-3.5 h-3.5" /> Clear all
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {history.map(entry => (
+              <div key={entry.id} className="rounded-lg border border-border/50 overflow-hidden">
+                <button
+                  className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-muted/30 transition-colors"
+                  onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Badge variant={riskConfig[entry.result.overallRisk].badge} className="text-xs shrink-0">
+                      {riskConfig[entry.result.overallRisk].label}
+                    </Badge>
+                    <span className="text-sm truncate">{entry.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 ml-3">
+                    <span className="text-xs text-muted-foreground">{format(new Date(entry.createdAt), "MMM d, HH:mm")}</span>
+                    {expandedId === entry.id ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </div>
+                </button>
+                {expandedId === entry.id && (
+                  <div className="border-t border-border/50 bg-muted/20 px-4 py-3 space-y-2">
+                    <p className="text-sm text-muted-foreground">{entry.result.summary}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {entry.result.flakyTests.map((t, i) => (
+                        <Badge key={i} variant="outline" className={`text-xs ${riskConfig[t.riskLevel].color}`}>
+                          {t.testName.slice(0, 40)}{t.testName.length > 40 ? "…" : ""}
+                        </Badge>
+                      ))}
+                    </div>
+                    <Button size="sm" variant="secondary" className="h-7 text-xs" onClick={() => restoreFromHistory(entry)}>
+                      View full result
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
@@ -215,6 +282,9 @@ export function FlakyDetectorPage() {
                 <Shuffle className="w-10 h-10 mx-auto mb-3 opacity-20" />
                 <p className="text-sm">Analysis results will appear here</p>
                 <p className="text-xs mt-1 opacity-60">Paste a test file and hit Detect</p>
+                {history.length > 0 && (
+                  <p className="text-xs mt-2 opacity-60">{history.length} past analysis{history.length !== 1 ? "es" : ""} saved — click History above</p>
+                )}
               </CardContent>
             </Card>
           )}

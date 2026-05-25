@@ -10,25 +10,21 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, BugPlay, Loader2, FileText, Terminal, CheckCircle, AlertTriangle, Server, Globe, Video, Download } from "lucide-react";
+import { ArrowLeft, BugPlay, Loader2, FileText, Terminal, CheckCircle, AlertTriangle, Server, Globe, Video, Download, Upload, Film } from "lucide-react";
 import { SiGithub } from "react-icons/si";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
-// Import fetch issue mutator here if available or use standard fetch
-// Assuming useFetchGithubIssue is available in the real api-client, 
-// if not we will mock the functionality to avoid build errors.
-// const useFetchGithubIssue = ... 
+import { useState, useRef } from "react";
 
 const SOURCE_TYPES = [
-  { id: "raw_text", icon: FileText, label: "Raw Text", desc: "Paste a bug description in plain English", placeholder: "Describe the bug: what you did, what you expected, what actually happened..." },
-  { id: "github_url", icon: SiGithub, label: "GitHub Issue", desc: "Paste a GitHub issue URL to auto-fetch content", placeholder: "The fetched issue content will appear here after you click 'Fetch Issue', or paste it manually..." },
-  { id: "stack_trace", icon: Terminal, label: "Stack Trace", desc: "Paste a stack trace or error output", placeholder: "Paste the full stack trace here, including the error type and call chain..." },
-  { id: "jira_ticket", icon: CheckCircle, label: "Jira Ticket", desc: "Paste a Jira ticket description or URL", placeholder: "Paste the Jira ticket description, steps to reproduce, and any comments..." },
-  { id: "sentry_event", icon: AlertTriangle, label: "Sentry Event", desc: "Paste a Sentry event URL, ID, or error details", placeholder: "Paste the Sentry event details, exception info, breadcrumbs, and context..." },
-  { id: "log_file", icon: Server, label: "Log File", desc: "Paste log file output around the time of the bug", placeholder: "Paste the relevant log output, including lines before and after the error..." },
-  { id: "curl_request", icon: Globe, label: "cURL Request", desc: "Paste a failed curl command or API request/response", placeholder: "Paste the curl command and/or the request/response that failed..." },
-  { id: "video_description", icon: Video, label: "Video / Recording", desc: "Describe what you see in a screen recording", placeholder: "Describe what you see: user actions, what appears on screen, when it breaks..." },
+  { id: "raw_text", icon: FileText, label: "Raw Text", desc: "Paste a bug description in plain English", placeholder: "Describe the bug: what you did, what you expected, what actually happened...", fileAccept: null },
+  { id: "github_url", icon: SiGithub, label: "GitHub Issue", desc: "Paste a GitHub issue URL to auto-fetch content", placeholder: "The fetched issue content will appear here after you click 'Fetch Issue', or paste it manually...", fileAccept: null },
+  { id: "stack_trace", icon: Terminal, label: "Stack Trace", desc: "Paste a stack trace or error output", placeholder: "Paste the full stack trace here, including the error type and call chain...", fileAccept: ".txt,.log" },
+  { id: "jira_ticket", icon: CheckCircle, label: "Jira Ticket", desc: "Paste a Jira ticket description or URL", placeholder: "Paste the Jira ticket description, steps to reproduce, and any comments...", fileAccept: ".txt" },
+  { id: "sentry_event", icon: AlertTriangle, label: "Sentry Event", desc: "Paste a Sentry event URL, ID, or error details", placeholder: "Paste the Sentry event details, exception info, breadcrumbs, and context...", fileAccept: ".json,.txt" },
+  { id: "log_file", icon: Server, label: "Log File", desc: "Paste log file output around the time of the bug", placeholder: "Paste the relevant log output, including lines before and after the error...", fileAccept: ".log,.txt,.csv" },
+  { id: "curl_request", icon: Globe, label: "cURL Request", desc: "Paste a failed curl command or API request/response", placeholder: "Paste the curl command and/or the request/response that failed...", fileAccept: ".txt,.sh" },
+  { id: "video_description", icon: Video, label: "Video / Recording", desc: "Describe what you see in a screen recording", placeholder: "Describe what you see: user actions, what appears on screen, when it breaks...", fileAccept: ".mp4,.mov,.webm,.avi,.mkv" },
 ] as const;
 
 const formSchema = z.object({
@@ -47,7 +43,9 @@ export function NewAnalysis() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [isFetchingIssue, setIsFetchingIssue] = useState(false);
-  
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -63,6 +61,7 @@ export function NewAnalysis() {
 
   const createAnalysis = useCreateAnalysis();
   const inputType = form.watch("inputType");
+  const selectedSource = SOURCE_TYPES.find(s => s.id === inputType);
 
   const handleFetchIssue = async () => {
     const url = form.getValues("githubUrl");
@@ -70,7 +69,6 @@ export function NewAnalysis() {
       toast({ variant: "destructive", title: "Error", description: "Please enter a GitHub URL" });
       return;
     }
-    
     setIsFetchingIssue(true);
     try {
       const response = await fetch(`${import.meta.env.BASE_URL}api/github/fetch-issue`, {
@@ -78,24 +76,13 @@ export function NewAnalysis() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url })
       });
-      
       if (!response.ok) throw new Error("Failed to fetch issue");
       const data = await response.json();
-      
-      // Use server-assembled formattedContent if available (handles truncation)
       const formatted = data.formattedContent ?? `Title: ${data.title}\n\nState: ${data.state}\nAuthor: @${data.author}\nLabels: ${(data.labels || []).join(', ')}\n\nDescription:\n${data.body}\n\nComments:\n${(data.comments || []).join('\n\n')}`;
-      
       form.setValue("rawInput", formatted);
-      if (!form.getValues("title")) {
-        form.setValue("title", data.title);
-      }
-      
+      if (!form.getValues("title")) form.setValue("title", data.title);
       if (data.truncated) {
-        toast({
-          variant: "destructive",
-          title: "Issue content was truncated",
-          description: `The issue has ${data.originalCommentCount} comments. Long comment threads were trimmed to prevent context overflow — the pipeline will still receive the most important content.`,
-        });
+        toast({ variant: "destructive", title: "Issue content was truncated", description: `The issue has ${data.originalCommentCount} comments. Long comment threads were trimmed to prevent context overflow.` });
       } else {
         toast({ title: "Issue fetched successfully" });
       }
@@ -105,6 +92,36 @@ export function NewAnalysis() {
       setIsFetchingIssue(false);
     }
   };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const isVideo = /\.(mp4|mov|webm|avi|mkv)$/i.test(file.name);
+
+    if (isVideo) {
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+      const videoMeta = `[Attached video: ${file.name} — ${sizeMB} MB]\n\nDescribe what you see in this recording:\n`;
+      form.setValue("rawInput", videoMeta);
+      setUploadedFileName(file.name);
+      if (!form.getValues("title")) form.setValue("title", file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " "));
+      toast({ title: "Video attached", description: "Add a description of what you see in the recording below." });
+    } else {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target?.result as string;
+        form.setValue("rawInput", text);
+        setUploadedFileName(file.name);
+        if (!form.getValues("title")) form.setValue("title", file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " "));
+        toast({ title: "File loaded", description: `${file.name} (${(file.size / 1024).toFixed(1)} KB)` });
+      };
+      reader.readAsText(file);
+    }
+
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const triggerFileUpload = () => fileInputRef.current?.click();
 
   const onSubmit = (values: FormValues) => {
     createAnalysis.mutate(
@@ -120,27 +137,26 @@ export function NewAnalysis() {
       },
       {
         onSuccess: (analysis) => {
-          toast({
-            title: "Analysis created",
-            description: values.autoRun ? "Starting pipeline..." : "Ready to run pipeline.",
-          });
+          toast({ title: "Analysis created", description: values.autoRun ? "Starting pipeline..." : "Ready to run pipeline." });
           setLocation(`/analyses/${analysis.id}${values.autoRun ? "?autorun=1" : ""}`);
         },
         onError: (error) => {
-          toast({
-            variant: "destructive",
-            title: "Failed to create analysis",
-            description: (error as unknown as { error?: string }).error || "An unexpected error occurred",
-          });
+          toast({ variant: "destructive", title: "Failed to create analysis", description: (error as unknown as { error?: string }).error || "An unexpected error occurred" });
         },
       }
     );
   };
 
-  const selectedSource = SOURCE_TYPES.find(s => s.id === inputType);
-
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-16">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={selectedSource?.fileAccept ?? undefined}
+        className="hidden"
+        onChange={handleFileUpload}
+      />
+
       <div className="flex items-center gap-4">
         <Link href="/">
           <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -155,7 +171,7 @@ export function NewAnalysis() {
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-          
+
           <div className="space-y-4">
             <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">1. Select Source Type</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -164,10 +180,13 @@ export function NewAnalysis() {
                 return (
                   <div
                     key={source.id}
-                    onClick={() => form.setValue("inputType", source.id as any)}
+                    onClick={() => {
+                      form.setValue("inputType", source.id as any);
+                      setUploadedFileName(null);
+                    }}
                     className={`cursor-pointer rounded-xl border p-4 transition-all duration-200 ${
-                      isSelected 
-                        ? "border-primary bg-primary/10 shadow-sm ring-1 ring-primary/30" 
+                      isSelected
+                        ? "border-primary bg-primary/10 shadow-sm ring-1 ring-primary/30"
                         : "border-border/50 bg-card/30 hover:border-primary/50 hover:bg-card/80"
                     }`}
                     data-testid={`source-type-${source.id}`}
@@ -176,9 +195,10 @@ export function NewAnalysis() {
                     <div className={`font-semibold text-sm mb-1 ${isSelected ? "text-foreground" : "text-foreground/80"}`}>
                       {source.label}
                     </div>
-                    <div className="text-xs text-muted-foreground leading-snug">
-                      {source.desc}
-                    </div>
+                    <div className="text-xs text-muted-foreground leading-snug">{source.desc}</div>
+                    {source.fileAccept && (
+                      <div className="mt-2 text-[10px] text-primary/60 font-mono">{source.fileAccept}</div>
+                    )}
                   </div>
                 );
               })}
@@ -191,7 +211,7 @@ export function NewAnalysis() {
               <CardDescription>Provide the necessary information to reproduce the issue.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              
+
               <FormField
                 control={form.control}
                 name="title"
@@ -218,9 +238,9 @@ export function NewAnalysis() {
                           <FormControl>
                             <Input placeholder="https://github.com/org/repo/issues/123" {...field} className="font-mono text-sm" />
                           </FormControl>
-                          <Button 
-                            type="button" 
-                            variant="secondary" 
+                          <Button
+                            type="button"
+                            variant="secondary"
                             onClick={handleFetchIssue}
                             disabled={isFetchingIssue || !field.value}
                             data-testid="fetch-issue-btn"
@@ -242,14 +262,43 @@ export function NewAnalysis() {
                 name="rawInput"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Raw Input / Bug Description</FormLabel>
+                    <div className="flex items-center justify-between">
+                      <FormLabel>
+                        {inputType === "video_description" ? "Video Description" : "Raw Input / Bug Description"}
+                      </FormLabel>
+                      {selectedSource?.fileAccept && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={triggerFileUpload}
+                          className="gap-2 text-xs h-7"
+                        >
+                          {inputType === "video_description"
+                            ? <Film className="w-3.5 h-3.5" />
+                            : <Upload className="w-3.5 h-3.5" />}
+                          {uploadedFileName
+                            ? <span className="max-w-32 truncate">{uploadedFileName}</span>
+                            : inputType === "video_description"
+                              ? "Attach video"
+                              : "Upload file"}
+                        </Button>
+                      )}
+                    </div>
                     <FormControl>
-                      <Textarea 
-                        placeholder={selectedSource?.placeholder || ""} 
-                        className="min-h-[200px] font-mono text-sm resize-y" 
-                        {...field} 
+                      <Textarea
+                        placeholder={selectedSource?.placeholder || ""}
+                        className="min-h-[200px] font-mono text-sm resize-y"
+                        {...field}
                       />
                     </FormControl>
+                    {selectedSource?.fileAccept && (
+                      <FormDescription>
+                        {inputType === "video_description"
+                          ? "Attach a video file to auto-fill the filename, then describe what you see."
+                          : `Upload a file (${selectedSource.fileAccept}) to auto-populate this field.`}
+                      </FormDescription>
+                    )}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -282,10 +331,10 @@ export function NewAnalysis() {
                         <FormItem>
                           <FormDescription className="mb-2">Any relevant code snippets, config files, or environment details.</FormDescription>
                           <FormControl>
-                            <Textarea 
-                              placeholder="// Optional: Paste relevant code snippets here" 
-                              className="min-h-[150px] font-mono text-sm bg-muted/50 resize-y" 
-                              {...field} 
+                            <Textarea
+                              placeholder="// Optional: Paste relevant code snippets here"
+                              className="min-h-[150px] font-mono text-sm bg-muted/50 resize-y"
+                              {...field}
                             />
                           </FormControl>
                           <FormMessage />
@@ -318,8 +367,8 @@ export function NewAnalysis() {
                   )}
                 />
 
-                <Button 
-                  type="submit" 
+                <Button
+                  type="submit"
                   disabled={createAnalysis.isPending}
                   className="font-mono"
                   data-testid="submit-analysis-btn"
