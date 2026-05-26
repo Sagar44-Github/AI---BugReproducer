@@ -17,6 +17,10 @@ type NotificationsContextType = {
   markRead: (id: string) => void;
   clearAll: () => void;
   addNotification: (n: Omit<AppNotification, "id" | "createdAt" | "read">) => void;
+  /** Call this from the detail page when a pipeline finishes via SSE.
+   *  It adds the notification AND pre-updates trackedStatuses so the
+   *  30-second polling loop never fires a duplicate. */
+  notifyPipelineDone: (analysisId: number, analysisTitle: string, success: boolean) => void;
 };
 
 const NotificationsContext = createContext<NotificationsContextType | null>(null);
@@ -80,6 +84,21 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     return () => clearInterval(interval);
   }, [addNotification]);
 
+  /**
+   * Called by the detail page when a pipeline finishes via SSE.
+   * Pre-updates trackedStatuses so the polling loop cannot fire a duplicate.
+   */
+  const notifyPipelineDone = useCallback((analysisId: number, analysisTitle: string, success: boolean) => {
+    // Immediately stamp the final status so the next poll sees no transition
+    trackedStatuses.current.set(analysisId, success ? "completed" : "failed");
+    addNotification({
+      type: success ? "pipeline_complete" : "pipeline_failed",
+      title: success ? "Pipeline complete" : "Pipeline failed",
+      analysisId,
+      analysisTitle,
+    });
+  }, [addNotification]);
+
   const markRead = (id: string) => {
     setNotifications(prev => { const u = prev.map(n => n.id === id ? { ...n, read: true } : n); save(u); return u; });
   };
@@ -91,7 +110,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
-    <NotificationsContext.Provider value={{ notifications, unreadCount, markAllRead, markRead, clearAll, addNotification }}>
+    <NotificationsContext.Provider value={{ notifications, unreadCount, markAllRead, markRead, clearAll, addNotification, notifyPipelineDone }}>
       {children}
     </NotificationsContext.Provider>
   );

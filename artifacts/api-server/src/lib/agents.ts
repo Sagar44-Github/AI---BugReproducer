@@ -155,7 +155,7 @@ async function runAgent(
     const stream = await openai.chat.completions.create(
       {
         model: "llama-3.3-70b-versatile",
-        max_completion_tokens: 4096,
+        max_completion_tokens: 8192,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },

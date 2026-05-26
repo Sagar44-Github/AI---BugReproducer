@@ -449,7 +449,7 @@ export function AnalysisDetail() {
   const [isRegenerating, setIsRegenerating] = useState(false);
 
   // Notifications
-  const { addNotification } = useNotifications();
+  const { notifyPipelineDone } = useNotifications();
 
   // Past-run toggle & simplified view
   const [showPastRun, setShowPastRun] = useState(false);
@@ -739,12 +739,7 @@ export function AnalysisDetail() {
                 setRateLimitInfo(null);
                 setTimeoutMessage(null);
                 toast({ title: "Pipeline Complete", description: "Bug reproduction analysis finished successfully." });
-                addNotification({
-                  type: "pipeline_complete",
-                  title: "Pipeline complete",
-                  analysisId: Number(id),
-                  analysisTitle: analysis?.title ?? `Analysis #${id}`,
-                });
+                notifyPipelineDone(Number(id), analysis?.title ?? `Analysis #${id}`, true);
                 break;
               }
 
@@ -755,12 +750,7 @@ export function AnalysisDetail() {
                 setTimeoutMessage(null);
                 setIsRunning(false);
                 queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(id) });
-                addNotification({
-                  type: "pipeline_failed",
-                  title: "Pipeline failed",
-                  analysisId: Number(id),
-                  analysisTitle: analysis?.title ?? `Analysis #${id}`,
-                });
+                notifyPipelineDone(Number(id), analysis?.title ?? `Analysis #${id}`, false);
                 break;
               }
 
