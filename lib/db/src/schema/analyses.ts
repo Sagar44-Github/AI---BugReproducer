@@ -5,25 +5,80 @@ import {
   timestamp,
   real,
   integer,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+
+// ─── Projects ──────────────────────────────────────────────────────────────────
+
+export const projectsTable = pgTable("projects", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  defaultFramework: text("default_framework"),
+  slackWebhookUrl: text("slack_webhook_url"),
+  discordWebhookUrl: text("discord_webhook_url"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertProjectSchema = createInsertSchema(projectsTable).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type Project = typeof projectsTable.$inferSelect;
+export type InsertProject = z.infer<typeof insertProjectSchema>;
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+
+export const apiKeysTable = pgTable("api_keys", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  keyHash: text("key_hash").notNull(),
+  prefix: text("prefix").notNull(),
+  note: text("note"),
+  projectId: integer("project_id"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+});
+
+export type ApiKey = typeof apiKeysTable.$inferSelect;
+
+// ─── Analyses ─────────────────────────────────────────────────────────────────
 
 export const analysesTable = pgTable("analyses", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
   inputType: text("input_type", {
-    enum: ["raw_text", "github_url", "stack_trace", "jira_ticket", "sentry_event", "log_file", "curl_request", "video_description"],
+    enum: [
+      "raw_text",
+      "github_url",
+      "stack_trace",
+      "jira_ticket",
+      "sentry_event",
+      "log_file",
+      "curl_request",
+      "video_description",
+      "screenshot",
+      "performance_profile",
+    ],
   }).notNull(),
   rawInput: text("raw_input").notNull(),
   githubUrl: text("github_url"),
   codeContext: text("code_context"),
   tags: text("tags"),
+  autoTags: text("auto_tags"),
+  projectId: integer("project_id"),
   status: text("status", {
     enum: ["pending", "running", "completed", "failed"],
   })
     .notNull()
     .default("pending"),
+  // Pipeline outputs
   confidenceScore: real("confidence_score"),
   confidenceBreakdown: text("confidence_breakdown"),
   severity: text("severity", {
@@ -41,6 +96,16 @@ export const analysesTable = pgTable("analyses", {
   testSyntaxStatus: text("test_syntax_status", {
     enum: ["verified", "warning", "unchecked"],
   }),
+  fixSuggestions: text("fix_suggestions"),
+  // Resolution tracking
+  resolutionStatus: text("resolution_status", {
+    enum: ["open", "in_progress", "fixed", "verified_fixed", "wont_fix"],
+  })
+    .notNull()
+    .default("open"),
+  resolvedBy: text("resolved_by"),
+  resolvedAt: timestamp("resolved_at"),
+  fixDescription: text("fix_description"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
