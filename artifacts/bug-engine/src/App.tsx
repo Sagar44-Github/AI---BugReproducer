@@ -15,6 +15,9 @@ import { Settings } from "@/pages/settings";
 import { EnvDiffPage } from "@/pages/env-diff";
 import { Nl2TestPage } from "@/pages/nl2test";
 import { FlakyDetectorPage } from "@/pages/flaky-detector";
+import { ProjectsPage } from "@/pages/projects";
+import { RegressionGuardPage } from "@/pages/regression-guard";
+import { BugDigestPage } from "@/pages/bug-digest";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -32,6 +35,9 @@ function Router() {
       <Route path="/tools/env-diff" component={EnvDiffPage} />
       <Route path="/tools/nl2test" component={Nl2TestPage} />
       <Route path="/tools/flaky-detector" component={FlakyDetectorPage} />
+      <Route path="/tools/regression-guard" component={RegressionGuardPage} />
+      <Route path="/tools/bug-digest" component={BugDigestPage} />
+      <Route path="/projects" component={ProjectsPage} />
       <Route component={NotFound} />
     </Switch>
   );

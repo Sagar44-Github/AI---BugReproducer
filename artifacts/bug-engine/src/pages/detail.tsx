@@ -14,7 +14,9 @@ import {
   ChevronDown, ChevronUp, Users, MessageSquare, Clock,
   Network, CheckCheck, XCircle, HelpCircle, PenLine,
   RefreshCw, Send, Bot, Download, FileJson,
-  Eye, EyeOff, Play, Layers, Terminal
+  Eye, EyeOff, Play, Layers, Terminal,
+  Lightbulb, MapPin, Zap, CheckCheck as CheckDone,
+  CircleDot, CircleCheck, CircleX, CircleMinus
 } from "lucide-react";
 import { useNotifications } from "@/contexts/notifications";
 import { format } from "date-fns";
@@ -1430,15 +1432,21 @@ export function AnalysisDetail() {
           </div>
 
           <Tabs defaultValue="steps" className="w-full">
-            <TabsList className="w-full grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 bg-card border border-border/50 h-auto p-1 gap-1">
-              <TabsTrigger value="steps" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Repro</TabsTrigger>
-              <TabsTrigger value="test" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Test Code</TabsTrigger>
-              <TabsTrigger value="hypotheses" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Hypotheses</TabsTrigger>
-              <TabsTrigger value="diagram" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Flow</TabsTrigger>
-              <TabsTrigger value="questions" className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Questions</TabsTrigger>
-              <TabsTrigger value="audit" onClick={() => {}} className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Audit Trail</TabsTrigger>
-              <TabsTrigger value="correlations" onClick={fetchCorrelations} className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Similar Bugs</TabsTrigger>
-              <TabsTrigger value="collaborate" onClick={() => { loadAnnotations(); connectCollaboration(); }} className="font-mono text-xs py-2 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+            <TabsList className="w-full flex flex-wrap bg-card border border-border/50 h-auto p-1 gap-1">
+              <TabsTrigger value="steps" className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Repro</TabsTrigger>
+              <TabsTrigger value="test" className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Test Code</TabsTrigger>
+              <TabsTrigger value="hypotheses" className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Hypotheses</TabsTrigger>
+              <TabsTrigger value="diagram" className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Flow</TabsTrigger>
+              <TabsTrigger value="fixes" className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary flex items-center gap-1">
+                <Lightbulb className="w-3 h-3" />Fixes
+              </TabsTrigger>
+              <TabsTrigger value="questions" className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Questions</TabsTrigger>
+              <TabsTrigger value="resolution" className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary flex items-center gap-1">
+                <CheckDone className="w-3 h-3" />Resolve
+              </TabsTrigger>
+              <TabsTrigger value="audit" onClick={() => {}} className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Audit Trail</TabsTrigger>
+              <TabsTrigger value="correlations" onClick={fetchCorrelations} className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">Similar Bugs</TabsTrigger>
+              <TabsTrigger value="collaborate" onClick={() => { loadAnnotations(); connectCollaboration(); }} className="font-mono text-xs py-2 px-3 data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
                 <Users className="w-3 h-3 mr-1" />Team
               </TabsTrigger>
             </TabsList>
@@ -2055,10 +2063,226 @@ export function AnalysisDetail() {
                   </CardContent>
                 </Card>
               </TabsContent>
+
+              {/* Fix Suggestions tab */}
+              <TabsContent value="fixes" className="m-0">
+                <Card className="border-border/50 bg-card shadow-sm">
+                  <CardHeader className="pb-3 border-b border-border/50">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <Lightbulb className="w-4 h-4 text-yellow-400" />
+                      AI Fix Suggestions
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Ranked concrete code fixes generated by the Fix Suggester agent
+                    </p>
+                  </CardHeader>
+                  <CardContent className="p-5">
+                    {(() => {
+                      const raw = analysis.fixSuggestions as string | undefined;
+                      if (!raw) {
+                        return (
+                          <div className="text-center py-10 text-muted-foreground/40">
+                            <Lightbulb className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                            <p className="text-sm">Fix suggestions not available — run the pipeline to generate them.</p>
+                          </div>
+                        );
+                      }
+                      let suggestions: Array<{
+                        rank: number; title: string; description: string;
+                        codeLocation: string; effort: string; confidence: string;
+                      }> = [];
+                      try { suggestions = JSON.parse(raw) as typeof suggestions; } catch { /* empty */ }
+                      if (suggestions.length === 0) {
+                        return (
+                          <div className="text-center py-10 text-muted-foreground/40">
+                            <Lightbulb className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                            <p className="text-sm">No fix suggestions available for this analysis.</p>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="space-y-3">
+                          {suggestions.map((s, i) => (
+                            <div key={i} className="rounded-lg border border-border/50 bg-muted/20 p-4 space-y-2">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-5 h-5 rounded-full bg-primary/20 text-primary text-xs font-bold flex items-center justify-center shrink-0">{s.rank}</span>
+                                  <span className="font-semibold text-sm">{s.title}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${
+                                    s.confidence === "high" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                                    s.confidence === "medium" ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" :
+                                    "bg-muted text-muted-foreground border-border"
+                                  }`}>{s.confidence} conf.</span>
+                                  <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${
+                                    s.effort === "low" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                                    s.effort === "medium" ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" :
+                                    "bg-orange-500/10 text-orange-400 border-orange-500/20"
+                                  }`}>{s.effort} effort</span>
+                                </div>
+                              </div>
+                              <p className="text-sm text-muted-foreground leading-relaxed">{s.description}</p>
+                              <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
+                                <MapPin className="w-3 h-3" />
+                                <code className="font-mono">{s.codeLocation}</code>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Resolution tab */}
+              <TabsContent value="resolution" className="m-0">
+                <Card className="border-border/50 bg-card shadow-sm">
+                  <CardHeader className="pb-3 border-b border-border/50">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <CircleDot className="w-4 h-4 text-primary" />
+                      Resolution Tracking
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Track the fix lifecycle from discovery to verified resolution
+                    </p>
+                  </CardHeader>
+                  <CardContent className="p-5 space-y-5">
+                    {/* Current status display */}
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Current status:</span>
+                      <span className={`text-sm font-semibold px-3 py-1 rounded-full border ${
+                        analysis.resolutionStatus === "verified_fixed" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                        analysis.resolutionStatus === "fixed" ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                        analysis.resolutionStatus === "in_progress" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                        analysis.resolutionStatus === "wont_fix" ? "bg-muted text-muted-foreground border-border" :
+                        "bg-orange-500/10 text-orange-400 border-orange-500/20"
+                      }`}>
+                        {(analysis.resolutionStatus ?? "open").replace(/_/g, " ")}
+                      </span>
+                      {analysis.resolvedBy && (
+                        <span className="text-xs text-muted-foreground">by {analysis.resolvedBy}</span>
+                      )}
+                      {analysis.resolvedAt && (
+                        <span className="text-xs text-muted-foreground">
+                          on {format(new Date(analysis.resolvedAt as string), "MMM d, yyyy")}
+                        </span>
+                      )}
+                    </div>
+
+                    {analysis.fixDescription && (
+                      <div className="rounded-lg border border-border/50 bg-muted/20 p-3">
+                        <p className="text-xs font-medium text-muted-foreground mb-1">Fix description</p>
+                        <p className="text-sm">{analysis.fixDescription}</p>
+                      </div>
+                    )}
+
+                    {/* Status timeline */}
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-3">Resolution flow</p>
+                      <div className="flex items-center gap-0">
+                        {[
+                          { status: "open", icon: CircleDot, label: "Open" },
+                          { status: "in_progress", icon: Zap, label: "In Progress" },
+                          { status: "fixed", icon: CircleCheck, label: "Fixed" },
+                          { status: "verified_fixed", icon: CheckCircle2, label: "Verified" },
+                        ].map((step, i, arr) => {
+                          const statuses = ["open", "in_progress", "fixed", "verified_fixed", "wont_fix"];
+                          const currentIdx = statuses.indexOf(analysis.resolutionStatus ?? "open");
+                          const stepIdx = statuses.indexOf(step.status);
+                          const isActive = analysis.resolutionStatus === step.status;
+                          const isPast = currentIdx > stepIdx && analysis.resolutionStatus !== "wont_fix";
+                          return (
+                            <div key={step.status} className="flex items-center">
+                              <div className={`flex flex-col items-center gap-1 ${isActive ? "opacity-100" : isPast ? "opacity-70" : "opacity-30"}`}>
+                                <step.icon className={`w-5 h-5 ${isActive ? "text-primary" : isPast ? "text-emerald-400" : "text-muted-foreground"}`} />
+                                <span className="text-[10px] text-muted-foreground whitespace-nowrap">{step.label}</span>
+                              </div>
+                              {i < arr.length - 1 && (
+                                <div className={`h-px w-8 mx-1 mb-3.5 ${isPast ? "bg-emerald-400/50" : "bg-border/50"}`} />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Update form */}
+                    <ResolveForm analysisId={analysis.id} currentStatus={analysis.resolutionStatus ?? "open"} />
+                  </CardContent>
+                </Card>
+              </TabsContent>
             </div>
           </Tabs>
         </div>
       )}
+    </div>
+  );
+}
+
+function ResolveForm({ analysisId, currentStatus }: { analysisId: number; currentStatus: string }) {
+  const [status, setStatus] = useState(currentStatus);
+  const [resolvedBy, setResolvedBy] = useState("");
+  const [fixDesc, setFixDesc] = useState("");
+  const [saving, setSaving] = useState(false);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const validStatuses = ["open", "in_progress", "fixed", "verified_fixed", "wont_fix"] as const;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, "")}/api/analyses/${analysisId}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolutionStatus: status, resolvedBy: resolvedBy || undefined, fixDescription: fixDesc || undefined }),
+      });
+      if (!r.ok) throw new Error();
+      await queryClient.invalidateQueries({ queryKey: getGetAnalysisQueryKey(analysisId) });
+      toast({ title: "Resolution updated" });
+    } catch {
+      toast({ title: "Failed to update resolution", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3 pt-2 border-t border-border/50">
+      <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Update status</p>
+      <div className="flex flex-wrap gap-2">
+        {validStatuses.map(s => (
+          <button
+            key={s}
+            onClick={() => setStatus(s)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              status === s
+                ? "bg-primary/20 text-primary border-primary/30"
+                : "bg-card border-border/50 text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {s.replace(/_/g, " ")}
+          </button>
+        ))}
+      </div>
+      <Input
+        placeholder="Resolved by (name or team)"
+        value={resolvedBy}
+        onChange={e => setResolvedBy(e.target.value)}
+        className="text-sm"
+      />
+      <Textarea
+        placeholder="Describe the fix applied (optional)"
+        value={fixDesc}
+        onChange={e => setFixDesc(e.target.value)}
+        rows={3}
+        className="text-sm"
+      />
+      <Button onClick={save} disabled={saving} size="sm" className="gap-2">
+        {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</> : <><CheckCircle2 className="w-3.5 h-3.5" /> Update Resolution</>}
+      </Button>
     </div>
   );
 }

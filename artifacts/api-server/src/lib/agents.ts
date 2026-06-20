@@ -15,11 +15,14 @@ import {
   STEPS_SCHEMA_HINT,
   TEST_SCHEMA_HINT,
   SYNTHESIZER_SCHEMA_HINT,
+  FIX_SUGGESTER_SCHEMA_HINT,
+  FixSuggesterSchema,
   type EntityExtractionOutput,
   type HypothesesOutput,
   type StepValidationOutput,
   type TestWriterOutput,
   type SynthesizerOutput,
+  type FixSuggesterOutput,
 } from "./agentSchemas";
 import {
   calculateConfidenceScore,
@@ -88,6 +91,8 @@ export type PipelineResult = {
   severity: "critical" | "high" | "medium" | "low";
   severityReason: string;
   auditTrail: AuditEntry[];
+  fixSuggestions: string;
+  autoTags: string;
 };
 
 // ─── Source-type metadata ─────────────────────────────────────────────────────
@@ -101,6 +106,8 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   log_file: "log file output",
   curl_request: "failed curl/API request",
   video_description: "video/screen recording description",
+  screenshot: "screenshot or visual bug",
+  performance_profile: "performance profile or profiler output",
 };
 
 const SOURCE_TYPE_HINTS: Record<string, string> = {
@@ -118,6 +125,10 @@ const SOURCE_TYPE_HINTS: Record<string, string> = {
     "This is a failed API/curl request — note: the endpoint, HTTP method, headers, request body, response status code, response body, and any authentication indicators.",
   video_description:
     "This is a description of a recorded bug — focus on: the visual sequence of actions, the exact moment of failure, UI state changes, and any error messages visible.",
+  screenshot:
+    "This is a description of a screenshot — extract all visible error messages, status codes, UI state, and any stack traces or exception text visible on screen.",
+  performance_profile:
+    "This is a performance profile or profiler output — identify the slowest operations, memory hotspots, CPU bottlenecks, and the specific function calls causing performance degradation.",
   raw_text: "",
 };
 
@@ -736,21 +747,111 @@ Test framework: ${finalTestData.framework} — coverage: ${finalTestData.coverag
 
   logger.info(
     { confidenceScore: scored.score / 100, severity: synthData.severity, inputType },
-    "Pipeline complete — all 5 agents validated, confidence score is deterministic"
+    "Pipeline complete — core 5 agents validated, running Fix Suggester + Auto-Tagger"
   );
+
+  // ── Agent 6: Fix Suggester (non-critical — pipeline continues on failure) ──
+  let fixSuggestionsJson = "[]";
+  try {
+    const t0_fix = Date.now();
+    const fixData: FixSuggesterOutput = await runValidatedAgent(
+      "Fix Suggester",
+      FixSuggesterSchema,
+      `You are a senior software engineer specialising in root cause analysis and code fixes.
+Given a bug analysis, generate 3-5 concrete, ranked code fix suggestions.
+
+You MUST return ONLY valid JSON matching this schema:
+${FIX_SUGGESTER_SCHEMA_HINT}
+
+Rules:
+- Only suggest fixes for RETAINED hypotheses — never for eliminated ones
+- codeLocation must name the specific function/class/file
+- effort: "low" = < 2 hours, "medium" = half to full day, "high" = multiple days or architectural change
+- Fix descriptions must be actionable — no vague advice like "add error handling"`,
+      `Component: ${entityData.component}
+Trigger: ${entityData.triggerAction}
+Actual behavior: ${entityData.actualBehavior}
+Severity: ${synthData.severity}
+Retained hypotheses: ${JSON.stringify(hypothesesData.hypotheses.filter(h => h.status === "retained").map(h => ({ title: h.title, mechanism: h.mechanism })))}
+${codeContext ? `Code context:\n${codeContext}` : "No code context provided."}`,
+      onEvent
+    );
+    const fixMs = Date.now() - t0_fix;
+    fixSuggestionsJson = JSON.stringify(fixData.suggestions);
+    auditTrail.push({
+      timestamp: new Date().toISOString(),
+      agent: "Fix Suggester",
+      action: "generated_fix_suggestions",
+      decision: `Generated ${fixData.suggestions.length} fix suggestion(s) — top: "${fixData.suggestions[0]?.title}"`,
+      rationale: fixData.summary,
+      durationMs: fixMs,
+      details: fixData.suggestions.slice(0, 3).map((s, i) => ({
+        label: `Fix ${i + 1} (${s.effort} effort, ${s.confidence} confidence)`,
+        value: `${s.title} — ${s.codeLocation}`,
+        status: s.confidence === "high" ? ("ok" as const) : s.confidence === "medium" ? ("warn" as const) : ("info" as const),
+      })),
+    });
+  } catch (err) {
+    logger.warn({ err }, "Fix Suggester failed — continuing pipeline");
+    auditTrail.push({
+      timestamp: new Date().toISOString(),
+      agent: "Fix Suggester",
+      action: "skipped",
+      decision: "Fix suggestions unavailable",
+      rationale: "Agent failed or timed out — non-critical, pipeline result unaffected",
+    });
+  }
+
+  // ── Agent 7: Auto-Tagger (non-critical) ───────────────────────────────────
+  let autoTagsJson = "[]";
+  try {
+    const t0_tag = Date.now();
+    const tagRaw = await runAgent(
+      "Auto-Tagger",
+      `You are a bug taxonomy expert. Generate 3-8 short, lowercase, hyphenated tags for this bug.
+Return ONLY a JSON array of strings. No explanation, no markdown, no code fences.
+Example output: ["null-reference","async-race","auth"]`,
+      `Component: ${entityData.component}
+Trigger: ${entityData.triggerAction}
+Actual: ${entityData.actualBehavior}
+Severity: ${synthData.severity}
+Errors: ${entityData.errorMessages.slice(0, 3).join("; ")}
+Input type: ${inputType}`,
+      onEvent
+    );
+    const tagMs = Date.now() - t0_tag;
+    const tagContent = tagRaw.content.replace(/```json?\n?/g, "").replace(/```\n?/g, "").trim();
+    const arrMatch = tagContent.match(/\[[\s\S]*?\]/);
+    if (arrMatch) {
+      const rawTags = JSON.parse(arrMatch[0]) as unknown[];
+      const cleanTags = rawTags
+        .filter((t): t is string => typeof t === "string")
+        .map(t => t.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 30))
+        .filter(t => t.length > 0)
+        .slice(0, 10);
+      if (cleanTags.length > 0) autoTagsJson = JSON.stringify(cleanTags);
+    }
+    auditTrail.push({
+      timestamp: new Date().toISOString(),
+      agent: "Auto-Tagger",
+      action: "generated_tags",
+      decision: `Tagged: ${autoTagsJson}`,
+      rationale: "Taxonomy tags for search and classification",
+      durationMs: tagMs,
+    });
+  } catch (err) {
+    logger.warn({ err }, "Auto-Tagger failed — continuing pipeline");
+  }
 
   // ── Serialize structured outputs for DB storage ───────────────────────────
   return {
-    // JSON strings — frontend renders these as structured cards/lists
     extractedEntities: JSON.stringify(entityData),
     hypotheses: JSON.stringify(hypothesesData.hypotheses),
     reproductionSteps: JSON.stringify(stepData),
-    // Plain strings — use finalTestData (may be syntax-corrected version)
     testCode: finalTestData.testCode,
     flowDiagram: generateMermaidFromDiagram(synthData.diagram),
     clarifyingQuestions: JSON.stringify(synthData.clarifyingQuestions),
     testSyntaxStatus,
-    // Deterministic score from rubric — not LLM-generated
     confidenceScore: scored.score / 100,
     confidenceBreakdown: {
       score: scored.score,
@@ -762,6 +863,8 @@ Test framework: ${finalTestData.framework} — coverage: ${finalTestData.coverag
     severity: synthData.severity,
     severityReason: synthData.severityReason,
     auditTrail,
+    fixSuggestions: fixSuggestionsJson,
+    autoTags: autoTagsJson,
   };
 }
 
@@ -1056,4 +1159,164 @@ Return [] if no meaningful correlations are found. Be precise — only flag genu
   });
 
   return response.choices[0]?.message?.content ?? "[]";
+}
+
+// ─── Tool: Regression Guard ───────────────────────────────────────────────────
+
+export async function runRegressionGuard(
+  testCode: string,
+  codeChanges: string,
+  bugDescription: string
+): Promise<string> {
+  const response = await openai.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    max_completion_tokens: 4096,
+    messages: [
+      {
+        role: "system",
+        content: `You are an expert test coverage analyst. Given a test, a code diff, and a bug description, determine whether the test would catch the regression.
+
+Return ONLY this JSON (no markdown, no explanation):
+{
+  "verdict": "would_catch | would_miss | uncertain",
+  "confidence": "high | medium | low",
+  "reasoning": "Detailed paragraph explaining why the test would or would not catch this",
+  "criticalLines": ["exact lines from the diff that the test exercises"],
+  "missedScenarios": ["test cases not covered that could hide the regression"],
+  "recommendation": "How to strengthen the test to make it a proper regression guard"
+}`,
+      },
+      {
+        role: "user",
+        content: `Test code:\n${testCode}\n\nCode changes (diff):\n${codeChanges}\n\nBug description:\n${bugDescription}`,
+      },
+    ],
+  });
+  return response.choices[0]?.message?.content ?? "{}";
+}
+
+// ─── Tool: Image / Screenshot Analyzer ───────────────────────────────────────
+
+export async function runImageAnalyze(
+  imageDescription: string,
+  additionalContext?: string
+): Promise<string> {
+  const response = await openai.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    max_completion_tokens: 4096,
+    messages: [
+      {
+        role: "system",
+        content: `You are an expert bug analyst. Given a description of a screenshot or screen recording showing a bug, extract all bug-relevant information.
+
+Return ONLY this JSON (no markdown, no explanation):
+{
+  "extractedText": "All visible error messages, stack traces, codes, status codes",
+  "uiState": "What the UI looked like at the point of failure",
+  "visibleErrors": ["specific error messages or codes"],
+  "suggestedBugReport": "Complete well-structured bug report ready to submit to the pipeline",
+  "inputType": "raw_text | stack_trace | log_file",
+  "confidence": "high | medium | low"
+}`,
+      },
+      {
+        role: "user",
+        content: `Screenshot/recording description:\n${imageDescription}${additionalContext ? `\n\nAdditional context:\n${additionalContext}` : ""}`,
+      },
+    ],
+  });
+  return response.choices[0]?.message?.content ?? "{}";
+}
+
+// ─── Tool: Bug Digest ─────────────────────────────────────────────────────────
+
+export async function runBugDigest(
+  analyses: Array<{
+    id: number;
+    title: string;
+    severity: string | null;
+    status: string;
+    inputType: string;
+    confidenceScore: number | null;
+    createdAt: Date;
+    autoTags: string | null;
+  }>,
+  periodLabel: string
+): Promise<string> {
+  const summary = analyses.slice(0, 20).map(a => {
+    const tags = (() => { try { return (JSON.parse(a.autoTags ?? "[]") as string[]).join(", "); } catch { return ""; } })();
+    return `- [${a.severity ?? "unknown"}] ${a.title} (type: ${a.inputType}, status: ${a.status}, confidence: ${a.confidenceScore != null ? Math.round(a.confidenceScore * 100) + "%" : "N/A"}${tags ? `, tags: ${tags}` : ""})`;
+  }).join("\n");
+
+  const response = await openai.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    max_completion_tokens: 4096,
+    messages: [
+      {
+        role: "system",
+        content: `You are an engineering team lead writing a bug digest report for ${periodLabel}. Analyse the list of bugs and produce an insightful summary.
+
+Return ONLY this JSON (no markdown, no explanation):
+{
+  "summary": "2-3 sentence executive overview of the period",
+  "highlights": [
+    { "title": "Short callout title", "detail": "Detail text", "type": "critical | info | warning" }
+  ],
+  "patterns": ["recurring theme or root-cause cluster 1", "recurring theme 2"],
+  "recommendations": ["actionable item for the engineering team 1", "item 2"],
+  "topComponents": ["most affected component 1", "component 2"],
+  "riskLevel": "critical | high | medium | low",
+  "statsNote": "Key numbers in one sentence"
+}`,
+      },
+      {
+        role: "user",
+        content: `Bugs for ${periodLabel} (${analyses.length} total):\n${summary}`,
+      },
+    ],
+  });
+  return response.choices[0]?.message?.content ?? "{}";
+}
+
+// ─── Tool: Multi-Environment Reproduction Matrix ──────────────────────────────
+
+export async function runMultiEnvMatrix(
+  reproductionSteps: string,
+  environments: Array<{ name: string; config: string }>,
+  bugDescription: string
+): Promise<string> {
+  const envList = environments
+    .map((e, i) => `Environment ${i + 1} — ${e.name}:\n${e.config}`)
+    .join("\n\n");
+
+  const response = await openai.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    max_completion_tokens: 4096,
+    messages: [
+      {
+        role: "system",
+        content: `You are a senior QA engineer. Given bug reproduction steps and multiple environment configs, predict whether the bug would reproduce in each environment.
+
+Return ONLY this JSON (no markdown, no explanation):
+{
+  "matrix": [
+    {
+      "environment": "Environment name",
+      "reproduces": "yes | no | likely | unlikely",
+      "confidence": "high | medium | low",
+      "reasoning": "Why this environment would or would not reproduce the bug",
+      "keyDifference": "The specific config key/value that matters most"
+    }
+  ],
+  "isolationVerdict": "What the matrix reveals about the root cause (env-specific vs code-level)",
+  "recommendation": "Which environment to debug in and why"
+}`,
+      },
+      {
+        role: "user",
+        content: `Bug description:\n${bugDescription}\n\nReproduction steps:\n${reproductionSteps}\n\nEnvironments:\n${envList}`,
+      },
+    ],
+  });
+  return response.choices[0]?.message?.content ?? "{}";
 }

@@ -1,7 +1,9 @@
 import { Router, type IRouter } from "express";
-import { runEnvDiff, runNl2Test, runFlakyDetector } from "../lib/agents";
+import { runEnvDiff, runNl2Test, runFlakyDetector, runRegressionGuard, runImageAnalyze, runBugDigest } from "../lib/agents";
 import { runCodeInSandbox } from "../lib/codeRunner";
 import { logger } from "../lib/logger";
+import { db, analysesTable } from "@workspace/db";
+import { gte } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -94,6 +96,122 @@ router.post("/tools/flaky-detector", async (req, res): Promise<void> => {
   } catch (err) {
     logger.error({ err }, "flaky-detector error");
     res.status(500).json({ error: "Failed to detect flaky tests. Try again." });
+  }
+});
+
+// POST /tools/regression-guard
+router.post("/tools/regression-guard", async (req, res): Promise<void> => {
+  const { testCode, codeChanges, bugDescription } = req.body as {
+    testCode?: string; codeChanges?: string; bugDescription?: string;
+  };
+
+  if (!testCode?.trim() || !codeChanges?.trim() || !bugDescription?.trim()) {
+    res.status(400).json({ error: "testCode, codeChanges, and bugDescription are all required" });
+    return;
+  }
+
+  try {
+    const raw = await runRegressionGuard(testCode, codeChanges, bugDescription);
+    const result = parseJson(raw) as Record<string, unknown>;
+    res.json({
+      verdict: String(result.verdict ?? "uncertain"),
+      confidence: String(result.confidence ?? "low"),
+      reasoning: String(result.reasoning ?? ""),
+      criticalLines: Array.isArray(result.criticalLines) ? result.criticalLines : [],
+      missedScenarios: Array.isArray(result.missedScenarios) ? result.missedScenarios : [],
+      recommendation: String(result.recommendation ?? ""),
+    });
+  } catch (err) {
+    logger.error({ err }, "regression-guard error");
+    res.status(500).json({ error: "Failed to analyze regression coverage. Try again." });
+  }
+});
+
+// POST /tools/image-analyze
+router.post("/tools/image-analyze", async (req, res): Promise<void> => {
+  const { imageDescription, additionalContext } = req.body as {
+    imageDescription?: string; additionalContext?: string;
+  };
+
+  if (!imageDescription?.trim()) {
+    res.status(400).json({ error: "imageDescription is required" });
+    return;
+  }
+
+  try {
+    const raw = await runImageAnalyze(imageDescription, additionalContext);
+    const result = parseJson(raw) as Record<string, unknown>;
+    res.json({
+      extractedText: String(result.extractedText ?? ""),
+      uiState: String(result.uiState ?? ""),
+      visibleErrors: Array.isArray(result.visibleErrors) ? result.visibleErrors : [],
+      suggestedBugReport: String(result.suggestedBugReport ?? ""),
+      inputType: String(result.inputType ?? "raw_text"),
+      confidence: String(result.confidence ?? "low"),
+    });
+  } catch (err) {
+    logger.error({ err }, "image-analyze error");
+    res.status(500).json({ error: "Failed to analyze screenshot description. Try again." });
+  }
+});
+
+// POST /tools/bug-digest
+router.post("/tools/bug-digest", async (req, res): Promise<void> => {
+  const { period = "last_7_days" } = req.body as { period?: string };
+
+  const periodDays: Record<string, number> = {
+    today: 1,
+    last_7_days: 7,
+    last_30_days: 30,
+    all_time: 3650,
+  };
+  const days = periodDays[period] ?? 7;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+
+  try {
+    const analyses = await db
+      .select({
+        id: analysesTable.id,
+        title: analysesTable.title,
+        severity: analysesTable.severity,
+        status: analysesTable.status,
+        inputType: analysesTable.inputType,
+        confidenceScore: analysesTable.confidenceScore,
+        createdAt: analysesTable.createdAt,
+        autoTags: analysesTable.autoTags,
+      })
+      .from(analysesTable)
+      .where(gte(analysesTable.createdAt, cutoff))
+      .orderBy(analysesTable.createdAt);
+
+    if (analyses.length === 0) {
+      res.json({
+        summary: `No bugs were analysed during ${period.replace(/_/g, " ")}.`,
+        highlights: [],
+        patterns: [],
+        recommendations: ["Submit your first bug report to start tracking patterns"],
+        topComponents: [],
+        riskLevel: "low",
+        statsNote: "0 analyses in this period.",
+      });
+      return;
+    }
+
+    const raw = await runBugDigest(analyses, period.replace(/_/g, " "));
+    const result = parseJson(raw) as Record<string, unknown>;
+    res.json({
+      summary: String(result.summary ?? ""),
+      highlights: Array.isArray(result.highlights) ? result.highlights : [],
+      patterns: Array.isArray(result.patterns) ? result.patterns : [],
+      recommendations: Array.isArray(result.recommendations) ? result.recommendations : [],
+      topComponents: Array.isArray(result.topComponents) ? result.topComponents : [],
+      riskLevel: String(result.riskLevel ?? "low"),
+      statsNote: String(result.statsNote ?? ""),
+    });
+  } catch (err) {
+    logger.error({ err }, "bug-digest error");
+    res.status(500).json({ error: "Failed to generate bug digest. Try again." });
   }
 });
 

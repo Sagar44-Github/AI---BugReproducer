@@ -314,3 +314,35 @@ Diagram construction rules:
 - Scale to actual complexity: 3-step bug → 5-8 nodes; 7+ step bug → 9-14 nodes
 - Include stateChange on key nodes to explain what shifts at that point
 - Use edge labels to show branching conditions or state transitions`;
+
+// ─── Fix Suggester schema ─────────────────────────────────────────────────────
+
+export const FixSuggestionItemSchema = z.object({
+  rank: z.number().int().min(1).max(5),
+  title: z.string().min(1),
+  description: z.string().min(1),
+  codeLocation: z.string().min(1),
+  effort: z.enum(["low", "medium", "high"]),
+  confidence: z.enum(["high", "medium", "low"]),
+});
+
+export const FixSuggesterSchema = z.object({
+  suggestions: z.array(FixSuggestionItemSchema).min(1).max(5),
+  summary: z.string().min(1),
+});
+
+export type FixSuggesterOutput = z.infer<typeof FixSuggesterSchema>;
+
+export const FIX_SUGGESTER_SCHEMA_HINT = `{
+  "suggestions": [
+    {
+      "rank": 1,
+      "title": "string — short fix name",
+      "description": "string — exactly what to change and why",
+      "codeLocation": "string — specific function/class/file (e.g. UserService.getProfile() in src/services/user.ts)",
+      "effort": "low | medium | high",
+      "confidence": "high | medium | low"
+    }
+  ],
+  "summary": "string — one-sentence summary of the recommended approach"
+}`;

@@ -479,7 +479,7 @@ export function ExportPage() {
   });
 
   const questions = safeJson<string[]>(analysis.clarifyingQuestions, []);
-  const autoTags = safeJson<string[]>((analysis as Record<string, unknown>).autoTags as string, []);
+  const autoTags = safeJson<string[]>(analysis.autoTags ?? "", []);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-16">
@@ -596,12 +596,12 @@ export function ExportPage() {
           </section>
 
           {/* 5. Fix Suggestions */}
-          {(analysis as Record<string, unknown>).fixSuggestions && (
+          {analysis.fixSuggestions && (
             <>
               <div className="border-t border-border/30" />
               <section>
                 <SectionHeader icon={Lightbulb} title="5. AI Fix Suggestions" />
-                <FixSuggestionsSection raw={(analysis as Record<string, unknown>).fixSuggestions as string} />
+                <FixSuggestionsSection raw={analysis.fixSuggestions} />
               </section>
             </>
           )}

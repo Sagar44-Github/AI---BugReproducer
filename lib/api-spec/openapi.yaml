@@ -471,7 +471,7 @@ components:
           type: string
         inputType:
           type: string
-          enum: [raw_text, github_url, stack_trace, jira_ticket, sentry_event, log_file, curl_request, video_description]
+          enum: [raw_text, github_url, stack_trace, jira_ticket, sentry_event, log_file, curl_request, video_description, screenshot, performance_profile]
         rawInput:
           type: string
         githubUrl:
@@ -490,6 +490,11 @@ components:
           type: ["string", "null"]
         tags:
           type: ["string", "null"]
+        autoTags:
+          type: ["string", "null"]
+        resolutionStatus:
+          type: ["string", "null"]
+          enum: ["open", "in_progress", "fixed", "verified_fixed", "wont_fix", null]
         createdAt:
           type: string
           format: date-time
@@ -514,7 +519,7 @@ components:
           type: string
         inputType:
           type: string
-          enum: [raw_text, github_url, stack_trace, jira_ticket, sentry_event, log_file, curl_request, video_description]
+          enum: [raw_text, github_url, stack_trace, jira_ticket, sentry_event, log_file, curl_request, video_description, screenshot, performance_profile]
         rawInput:
           type: string
         githubUrl:
@@ -538,6 +543,20 @@ components:
         correlations:
           type: ["string", "null"]
         tags:
+          type: ["string", "null"]
+        autoTags:
+          type: ["string", "null"]
+        fixSuggestions:
+          type: ["string", "null"]
+        resolutionStatus:
+          type: ["string", "null"]
+          enum: ["open", "in_progress", "fixed", "verified_fixed", "wont_fix", null]
+        resolvedBy:
+          type: ["string", "null"]
+        resolvedAt:
+          type: ["string", "null"]
+          format: date-time
+        fixDescription:
           type: ["string", "null"]
         extractedEntities:
           type: ["string", "null"]
@@ -576,7 +595,7 @@ components:
           type: string
         inputType:
           type: string
-          enum: [raw_text, github_url, stack_trace, jira_ticket, sentry_event, log_file, curl_request, video_description]
+          enum: [raw_text, github_url, stack_trace, jira_ticket, sentry_event, log_file, curl_request, video_description, screenshot, performance_profile]
         rawInput:
           type: string
         githubUrl:

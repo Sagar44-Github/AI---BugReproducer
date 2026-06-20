@@ -21,6 +21,8 @@ export const BugAnalysisInputType = {
   log_file: "log_file",
   curl_request: "curl_request",
   video_description: "video_description",
+  screenshot: "screenshot",
+  performance_profile: "performance_profile",
 } as const;
 
 export type BugAnalysisStatus =
@@ -47,6 +49,21 @@ export const BugAnalysisSeverity = {
   low: "low",
 } as const;
 
+/**
+ * @nullable
+ */
+export type BugAnalysisResolutionStatus =
+  | (typeof BugAnalysisResolutionStatus)[keyof typeof BugAnalysisResolutionStatus]
+  | null;
+
+export const BugAnalysisResolutionStatus = {
+  open: "open",
+  in_progress: "in_progress",
+  fixed: "fixed",
+  verified_fixed: "verified_fixed",
+  wont_fix: "wont_fix",
+} as const;
+
 export interface BugAnalysis {
   id: number;
   title: string;
@@ -65,6 +82,10 @@ export interface BugAnalysis {
   severityReason?: string | null;
   /** @nullable */
   tags?: string | null;
+  /** @nullable */
+  autoTags?: string | null;
+  /** @nullable */
+  resolutionStatus?: BugAnalysisResolutionStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +102,8 @@ export const BugAnalysisFullInputType = {
   log_file: "log_file",
   curl_request: "curl_request",
   video_description: "video_description",
+  screenshot: "screenshot",
+  performance_profile: "performance_profile",
 } as const;
 
 export type BugAnalysisFullStatus =
@@ -105,6 +128,21 @@ export const BugAnalysisFullSeverity = {
   high: "high",
   medium: "medium",
   low: "low",
+} as const;
+
+/**
+ * @nullable
+ */
+export type BugAnalysisFullResolutionStatus =
+  | (typeof BugAnalysisFullResolutionStatus)[keyof typeof BugAnalysisFullResolutionStatus]
+  | null;
+
+export const BugAnalysisFullResolutionStatus = {
+  open: "open",
+  in_progress: "in_progress",
+  fixed: "fixed",
+  verified_fixed: "verified_fixed",
+  wont_fix: "wont_fix",
 } as const;
 
 /**
@@ -145,6 +183,18 @@ export interface BugAnalysisFull {
   /** @nullable */
   tags?: string | null;
   /** @nullable */
+  autoTags?: string | null;
+  /** @nullable */
+  fixSuggestions?: string | null;
+  /** @nullable */
+  resolutionStatus?: BugAnalysisFullResolutionStatus;
+  /** @nullable */
+  resolvedBy?: string | null;
+  /** @nullable */
+  resolvedAt?: string | null;
+  /** @nullable */
+  fixDescription?: string | null;
+  /** @nullable */
   extractedEntities?: string | null;
   /** @nullable */
   hypotheses?: string | null;
@@ -174,6 +224,8 @@ export const CreateAnalysisBodyInputType = {
   log_file: "log_file",
   curl_request: "curl_request",
   video_description: "video_description",
+  screenshot: "screenshot",
+  performance_profile: "performance_profile",
 } as const;
 
 export interface CreateAnalysisBody {

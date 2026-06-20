@@ -1,0 +1,4 @@
+- [OpenAPI-first type safety](openapi-codegen-workflow.md) — new DB columns must be added to OpenAPI spec + codegen run before generated types reflect them in frontend.
+- [Non-critical pipeline agents](non-critical-agents.md) — Fix Suggester and Auto-Tagger use try/catch so pipeline never fails; always push audit entry even on skip.
+- [Trends endpoint placement](trends-endpoint-order.md) — GET /analyses/trends must be registered BEFORE GET /analyses/:id or Express matches "trends" as the :id param.
+- [Recharts in Vite monorepo](recharts-vite.md) — recharts optimized at runtime by Vite; first load triggers dep-optimization reload, which is normal and expected.

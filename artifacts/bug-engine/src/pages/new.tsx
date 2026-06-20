@@ -25,11 +25,13 @@ const SOURCE_TYPES = [
   { id: "log_file", icon: Server, label: "Log File", desc: "Paste log file output around the time of the bug", placeholder: "Paste the relevant log output, including lines before and after the error...", fileAccept: ".log,.txt,.csv" },
   { id: "curl_request", icon: Globe, label: "cURL Request", desc: "Paste a failed curl command or API request/response", placeholder: "Paste the curl command and/or the request/response that failed...", fileAccept: ".txt,.sh" },
   { id: "video_description", icon: Video, label: "Video / Recording", desc: "Describe what you see in a screen recording", placeholder: "Describe what you see: user actions, what appears on screen, when it breaks...", fileAccept: ".mp4,.mov,.webm,.avi,.mkv" },
+  { id: "screenshot", icon: Download, label: "Screenshot", desc: "Describe what's visible in a screenshot of the bug", placeholder: "Describe the screenshot: visible errors, UI state, any text or codes shown on screen...", fileAccept: ".png,.jpg,.jpeg,.webp,.gif" },
+  { id: "performance_profile", icon: Film, label: "Perf Profile", desc: "Paste a profiler output or performance trace", placeholder: "Paste the profiler output, performance trace, or describe the bottleneck observed...", fileAccept: ".json,.txt,.csv,.cpuprofile" },
 ] as const;
 
 const formSchema = z.object({
   title: z.string().min(1, "Title is required"),
-  inputType: z.enum(["raw_text", "github_url", "stack_trace", "jira_ticket", "sentry_event", "log_file", "curl_request", "video_description"] as const),
+  inputType: z.enum(["raw_text", "github_url", "stack_trace", "jira_ticket", "sentry_event", "log_file", "curl_request", "video_description", "screenshot", "performance_profile"] as const),
   rawInput: z.string().min(1, "Raw input is required"),
   githubUrl: z.string().optional(),
   codeContext: z.string().optional(),

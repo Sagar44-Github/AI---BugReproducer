@@ -3,7 +3,8 @@ import { Link, useLocation } from "wouter";
 import {
   Bug, LayoutDashboard, PlusCircle, History, Settings,
   GitCompare, FlaskConical, Shuffle, ChevronDown,
-  Bell, CheckCheck, Trash2, BugPlay, XCircle
+  Bell, CheckCheck, Trash2, BugPlay, XCircle,
+  FolderKanban, ShieldCheck, BookOpen
 } from "lucide-react";
 import { useNotifications } from "@/contexts/notifications";
 import { format } from "date-fns";
@@ -12,12 +13,15 @@ const mainNav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/new", label: "New Analysis", icon: PlusCircle },
   { href: "/history", label: "History", icon: History },
+  { href: "/projects", label: "Projects", icon: FolderKanban },
 ];
 
 const toolsNav = [
   { href: "/tools/env-diff", label: "Env Diff", icon: GitCompare },
   { href: "/tools/nl2test", label: "NL2Test", icon: FlaskConical },
   { href: "/tools/flaky-detector", label: "Flaky Detector", icon: Shuffle },
+  { href: "/tools/regression-guard", label: "Regression Guard", icon: ShieldCheck },
+  { href: "/tools/bug-digest", label: "Bug Digest", icon: BookOpen },
 ];
 
 function NotificationBell() {

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, avg, count, sql, ilike, and, ne, type SQL } from "drizzle-orm";
+import { eq, avg, count, sql, ilike, and, ne, gte, type SQL } from "drizzle-orm";
 import { db, analysesTable, collaborationAnnotationsTable } from "@workspace/db";
 import {
   CreateAnalysisBody,
@@ -8,7 +8,7 @@ import {
   RunAnalysisParams,
   UpdateAnalysisBody,
 } from "@workspace/api-zod";
-import { runBugReproductionPipeline, runCorrelation, runTestWriterWithOverride, type AgentEvent } from "../lib/agents";
+import { runBugReproductionPipeline, runCorrelation, runTestWriterWithOverride, runMultiEnvMatrix, type AgentEvent } from "../lib/agents";
 import { AgentValidationError, AgentTimeoutError } from "../lib/agentSchemas";
 import { logger } from "../lib/logger";
 import type { Response } from "express";
@@ -120,6 +120,40 @@ router.get("/analyses/stats/summary", async (_req, res): Promise<void> => {
     avgConfidence: totals.avgConfidence ? parseFloat(String(totals.avgConfidence)) : null,
     byInputType: byInputType.map(r => ({ inputType: r.inputType, count: Number(r.count) })),
   });
+});
+
+// GET /analyses/trends — must be before /:id
+router.get("/analyses/trends", async (req, res): Promise<void> => {
+  const days = Math.min(365, Math.max(1, parseInt(String(req.query.days ?? "30"), 10)));
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+
+  const rows = await db
+    .select({
+      date: sql<string>`DATE(created_at)`,
+      total: count(),
+      completed: count(sql`CASE WHEN status = 'completed' THEN 1 END`),
+      critical: count(sql`CASE WHEN severity = 'critical' THEN 1 END`),
+      high: count(sql`CASE WHEN severity = 'high' THEN 1 END`),
+      medium: count(sql`CASE WHEN severity = 'medium' THEN 1 END`),
+      low: count(sql`CASE WHEN severity = 'low' THEN 1 END`),
+      avgConf: avg(analysesTable.confidenceScore),
+    })
+    .from(analysesTable)
+    .where(gte(analysesTable.createdAt, cutoff))
+    .groupBy(sql`DATE(created_at)`)
+    .orderBy(sql`DATE(created_at)`);
+
+  res.json(rows.map(r => ({
+    date: r.date,
+    total: Number(r.total),
+    completed: Number(r.completed),
+    critical: Number(r.critical),
+    high: Number(r.high),
+    medium: Number(r.medium),
+    low: Number(r.low),
+    avgConfidence: r.avgConf ? parseFloat(String(r.avgConf)) : null,
+  })));
 });
 
 // GET /analyses/:id
@@ -604,6 +638,8 @@ router.post("/analyses/:id/run", async (req, res): Promise<void> => {
         severity: result.severity,
         severityReason: result.severityReason,
         auditTrail: JSON.stringify(result.auditTrail),
+        fixSuggestions: result.fixSuggestions,
+        autoTags: result.autoTags,
         updatedAt: new Date(),
       })
       .where(eq(analysesTable.id, params.data.id));
@@ -696,6 +732,66 @@ router.post("/analyses/:id/regenerate-test", async (req, res): Promise<void> => 
   } catch (err) {
     logger.error({ err }, "Test regeneration error");
     res.status(500).json({ error: "Failed to regenerate test code. Try again." });
+  }
+});
+
+// POST /analyses/:id/resolve
+router.post("/analyses/:id/resolve", async (req, res): Promise<void> => {
+  const params = GetAnalysisParams.safeParse({ id: req.params.id });
+  if (!params.success) { res.status(400).json({ error: "Invalid analysis id" }); return; }
+
+  const { resolutionStatus, resolvedBy, fixDescription } = req.body as {
+    resolutionStatus?: string; resolvedBy?: string; fixDescription?: string;
+  };
+  const validStatuses = ["open", "in_progress", "fixed", "verified_fixed", "wont_fix"] as const;
+  if (!resolutionStatus || !validStatuses.includes(resolutionStatus as (typeof validStatuses)[number])) {
+    res.status(400).json({ error: `resolutionStatus must be one of: ${validStatuses.join(", ")}` });
+    return;
+  }
+
+  const [updated] = await db
+    .update(analysesTable)
+    .set({
+      resolutionStatus: resolutionStatus as (typeof validStatuses)[number],
+      resolvedBy: resolvedBy ?? null,
+      resolvedAt: (resolutionStatus === "fixed" || resolutionStatus === "verified_fixed") ? new Date() : null,
+      fixDescription: fixDescription ?? null,
+      updatedAt: new Date(),
+    })
+    .where(eq(analysesTable.id, params.data.id))
+    .returning();
+
+  if (!updated) { res.status(404).json({ error: "Analysis not found" }); return; }
+  res.json(updated);
+});
+
+// POST /analyses/:id/multi-env
+router.post("/analyses/:id/multi-env", async (req, res): Promise<void> => {
+  const params = GetAnalysisParams.safeParse({ id: req.params.id });
+  if (!params.success) { res.status(400).json({ error: "Invalid analysis id" }); return; }
+
+  const [analysis] = await db.select().from(analysesTable).where(eq(analysesTable.id, params.data.id));
+  if (!analysis) { res.status(404).json({ error: "Analysis not found" }); return; }
+  if (analysis.status !== "completed" || !analysis.reproductionSteps) {
+    res.status(409).json({ error: "Analysis must be completed before running multi-env matrix" });
+    return;
+  }
+
+  const { environments } = req.body as { environments?: Array<{ name: string; config: string }> };
+  if (!Array.isArray(environments) || environments.length < 2) {
+    res.status(400).json({ error: "At least 2 environments are required" });
+    return;
+  }
+
+  try {
+    const raw = await runMultiEnvMatrix(analysis.reproductionSteps, environments, analysis.rawInput);
+    const cleaned = raw.replace(/```json?\n?/g, "").replace(/```\n?/g, "").trim();
+    const objMatch = cleaned.match(/\{[\s\S]*\}/);
+    const result = JSON.parse(objMatch?.[0] ?? "{}");
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "Multi-env matrix error");
+    res.status(500).json({ error: "Failed to run environment matrix. Try again." });
   }
 });
 

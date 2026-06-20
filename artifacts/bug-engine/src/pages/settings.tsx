@@ -4,11 +4,13 @@ import { Github, FileText, GitMerge, Terminal, CheckCircle, AlertTriangle, Serve
 
 export function Settings() {
   const agents = [
-    { name: "Entity Extraction", purpose: "Identifies components, actions, failures", model: "gpt-5.4" },
-    { name: "Hypothesis Generator", purpose: "Creates ranked root cause theories", model: "gpt-5.4" },
-    { name: "Step Validator", purpose: "Produces precise reproduction steps", model: "gpt-5.4" },
-    { name: "Test Writer", purpose: "Generates executable test code", model: "gpt-5.4" },
-    { name: "Analysis Synthesizer", purpose: "Mermaid diagrams, confidence scores", model: "gpt-5.4" },
+    { name: "Entity Extraction", purpose: "Identifies components, trigger actions, expected vs actual, environment, error messages", model: "llama-3.3-70b-versatile" },
+    { name: "Hypothesis Generator", purpose: "Creates 3-5 ranked root cause theories with retained/eliminated status", model: "llama-3.3-70b-versatile" },
+    { name: "Step Validator", purpose: "Produces precise, numbered reproduction steps with prerequisites", model: "llama-3.3-70b-versatile" },
+    { name: "Test Writer", purpose: "Generates executable test code with server-side syntax validation", model: "llama-3.3-70b-versatile" },
+    { name: "Analysis Synthesizer", purpose: "Mermaid flow diagram, clarifying questions, severity classification", model: "llama-3.3-70b-versatile" },
+    { name: "Fix Suggester", purpose: "3-5 ranked concrete code fix suggestions with location and effort", model: "llama-3.3-70b-versatile" },
+    { name: "Auto-Tagger", purpose: "3-8 lowercase hyphenated taxonomy tags for search and classification", model: "llama-3.3-70b-versatile" },
   ];
 
   const sourceTypes = [
@@ -20,6 +22,8 @@ export function Settings() {
     { icon: Server, label: "Log File", desc: "Paste log file output around the time of the bug" },
     { icon: RefreshCw, label: "curl / API Request", desc: "Paste a failed curl command or API request/response" },
     { icon: MonitorPlay, label: "Video / Recording", desc: "Describe what you see in a screen recording" },
+    { icon: MonitorPlay, label: "Screenshot", desc: "Describe what's visible in a bug screenshot" },
+    { icon: MonitorPlay, label: "Perf Profile", desc: "Paste a profiler output or performance trace" },
   ];
 
   return (
