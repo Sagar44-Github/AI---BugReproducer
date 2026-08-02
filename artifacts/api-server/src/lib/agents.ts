@@ -1,4 +1,4 @@
-import { openai } from "@workspace/integrations-openai-ai-server";
+import { getActiveClient, getActiveModel } from "./llmConfig";
 import { logger } from "./logger";
 import {
   EntityExtractionSchema,
@@ -163,9 +163,9 @@ async function runAgent(
   const timeoutHandle = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
 
   try {
-    const stream = await openai.chat.completions.create(
+    const stream = await getActiveClient().chat.completions.create(
       {
-        model: "llama-3.3-70b-versatile",
+        model: getActiveModel(),
         max_completion_tokens: 8192,
         messages: [
           { role: "system", content: systemPrompt },
@@ -955,7 +955,7 @@ export async function runEnvDiff(
   label1: string,
   label2: string
 ): Promise<string> {
-  const response = await openai.chat.completions.create({
+  const response = await getActiveClient().chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_completion_tokens: 3000,
     messages: [
@@ -1017,7 +1017,7 @@ export async function runNl2Test(
 ): Promise<string> {
   const context = codeContext ? `\n\nRelevant code:\n\`\`\`\n${codeContext}\n\`\`\`` : "";
 
-  const response = await openai.chat.completions.create({
+  const response = await getActiveClient().chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_completion_tokens: 3000,
     messages: [
@@ -1059,7 +1059,7 @@ export async function runFlakyDetector(
   testCode: string,
   language: string
 ): Promise<string> {
-  const response = await openai.chat.completions.create({
+  const response = await getActiveClient().chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_completion_tokens: 3000,
     messages: [
@@ -1129,7 +1129,7 @@ export async function runCorrelation(
     )
     .join("\n\n---\n\n");
 
-  const response = await openai.chat.completions.create({
+  const response = await getActiveClient().chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_completion_tokens: 2000,
     messages: [
@@ -1168,7 +1168,7 @@ export async function runRegressionGuard(
   codeChanges: string,
   bugDescription: string
 ): Promise<string> {
-  const response = await openai.chat.completions.create({
+  const response = await getActiveClient().chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_completion_tokens: 4096,
     messages: [
@@ -1201,7 +1201,7 @@ export async function runImageAnalyze(
   imageDescription: string,
   additionalContext?: string
 ): Promise<string> {
-  const response = await openai.chat.completions.create({
+  const response = await getActiveClient().chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_completion_tokens: 4096,
     messages: [
@@ -1248,7 +1248,7 @@ export async function runBugDigest(
     return `- [${a.severity ?? "unknown"}] ${a.title} (type: ${a.inputType}, status: ${a.status}, confidence: ${a.confidenceScore != null ? Math.round(a.confidenceScore * 100) + "%" : "N/A"}${tags ? `, tags: ${tags}` : ""})`;
   }).join("\n");
 
-  const response = await openai.chat.completions.create({
+  const response = await getActiveClient().chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_completion_tokens: 4096,
     messages: [
@@ -1289,7 +1289,7 @@ export async function runMultiEnvMatrix(
     .map((e, i) => `Environment ${i + 1} — ${e.name}:\n${e.config}`)
     .join("\n\n");
 
-  const response = await openai.chat.completions.create({
+  const response = await getActiveClient().chat.completions.create({
     model: "llama-3.3-70b-versatile",
     max_completion_tokens: 4096,
     messages: [

@@ -135,6 +135,20 @@ All original columns plus:
 ### `collaboration_annotations` table
 - id, analysis_id, author_name, type (note|verified|failed|question), step_ref, content, created_at
 
+## BYOK / LLM Config
+
+Provider config managed by `artifacts/api-server/src/lib/llmConfig.ts`:
+- Stored in `.llm-config.json` (server root); falls back to env vars if absent
+- Priority order: stored file → GROQ_API_KEY → OPENAI_API_KEY → AI_INTEGRATIONS_OPENAI_API_KEY
+- All `openai.chat` calls in agents.ts use `getActiveClient()` + `getActiveModel()` — never a hardcoded singleton
+- Settings routes: GET/POST `/api/settings/llm`, POST `/api/settings/llm/test`, POST `/api/settings/llm/reset`
+- Supported providers: groq, openai, ollama (local, no key), custom (any OpenAI-compatible)
+
+## Pages & Routes (updated)
+
+- `/settings` — Settings: AI Provider (BYOK), agent table, source types, tips
+- `/docs` — Full documentation: quick start, BYOK guide, pipeline, source types, tools, API reference
+
 ## Key Commands
 
 - `pnpm run typecheck` — full typecheck
@@ -149,3 +163,4 @@ All original columns plus:
 - The api-zod index.ts barrel is auto-fixed by the codegen script
 - Correlation results are cached after first fetch (refresh button resets cache)
 - Collaboration SSE uses in-memory Map — not persistent across server restarts
+- LLM config is persisted to `.llm-config.json`; calling `invalidateClient()` forces client rebuild

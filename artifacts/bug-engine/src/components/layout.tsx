@@ -184,6 +184,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <NotificationBell />
 
             <Link
+              href="/docs"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${
+                location === "/docs" ? "text-primary font-medium bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              }`}
+              title="Documentation"
+            >
+              <BookOpen className="w-4 h-4" />
+              <span className="hidden sm:inline-block">Docs</span>
+            </Link>
+
+            <Link
               href="/settings"
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${
                 location === "/settings" ? "text-primary font-medium bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"

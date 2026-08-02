@@ -4,6 +4,7 @@ import analysesRouter from "./analyses";
 import githubRouter from "./github";
 import toolsRouter from "./tools";
 import projectsRouter from "./projects";
+import settingsRouter from "./settings";
 
 const router: IRouter = Router();
 
@@ -12,5 +13,6 @@ router.use(analysesRouter);
 router.use(githubRouter);
 router.use(toolsRouter);
 router.use(projectsRouter);
+router.use(settingsRouter);
 
 export default router;
